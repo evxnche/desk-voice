@@ -1,0 +1,3 @@
+{
+  "functions": { "api/voice.js": { "maxDuration": 60 } }
+}

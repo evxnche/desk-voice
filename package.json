@@ -1,0 +1,10 @@
+{
+  "name": "desk-voice",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.91",
+    "ai": "^7.0.113"
+  },
+  "private": true
+}
