@@ -137,6 +137,7 @@ def _arrow(c, x, y, up):
 
 def _draw_static():
     global _static
+    font5.lowercase = False              # the radar keeps its capitals (flight numbers, types)
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
@@ -184,8 +185,10 @@ def _draw_static():
     c.fill_rect(0, 286, 400, 14, 1)
     c.text(dashboard.ascii(_footer)[:50] if _footer else "BOOT: next screen   KEY: refresh / hold to talk", 4, 289, 0)
     _static = bytearray(d.canvas_buffer)
+    font5.lowercase = True
 
 def _draw_planes():
+    font5.lowercase = False
     d = dashboard.display()
     c = d.canvas
     d.canvas_buffer[:] = _static
@@ -208,3 +211,4 @@ def _draw_planes():
             c.fill_rect(px + 5, py - 11, w + 2, 10, 0)
             font5.text(c, str(n), px + 6, py - 10)
     d.show()
+    font5.lowercase = True

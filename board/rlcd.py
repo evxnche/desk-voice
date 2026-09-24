@@ -2,6 +2,7 @@ import time
 from machine import Pin, SPI
 import framebuf
 import micropython
+import font5
 
 class RLCD:
     def __init__(self, spi, cs, dc, rst, width=400, height=300):
@@ -34,11 +35,13 @@ class RLCD:
     def line(self, x1, y1, x2, y2, c): self.canvas.line(x1, y1, x2, y2, c)
     def rect(self, x, y, w, h, c): self.canvas.rect(x, y, w, h, c)
     def fill_rect(self, x, y, w, h, c): self.canvas.fill_rect(x, y, w, h, c)
-    def text(self, msg, x, y, c=1): self.canvas.text(msg, x, y, c)
+    def text(self, msg, x, y, c=1): self.canvas.text(msg.lower() if font5.lowercase else msg, x, y, c)
     def clear(self, c=0): self.canvas.fill(c)
 
     # --- SCALABLE TEXT ---
     def text_large(self, msg, x, y, scale=2, c=1):
+        if font5.lowercase:
+            msg = msg.lower()
         char_w = 8; char_h = 8
         tmp_buf = bytearray(char_w * char_h // 8)
         tmp_fb = framebuf.FrameBuffer(tmp_buf, char_w, char_h, framebuf.MONO_HLSB)

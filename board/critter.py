@@ -152,7 +152,7 @@ class Scene:
             hint = "KEY: jump   BOOT: next screen"
         else:
             hint = "KEY: play again   BOOT: next screen"
-        c.text(hint, 4, 289, 0)
+        d.text(hint, 4, 289, 0)
         d.show()
 
 scene = Scene()
