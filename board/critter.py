@@ -1,5 +1,6 @@
 # Pixel screen: a little critter runs along the desk, hopping cacti under drifting clouds.
-import framebuf, random
+# It auto-plays like a screensaver ("demo") until KEY is tapped, then KEY is the jump button.
+import framebuf, random, time
 import dashboard
 
 GROUND = 250
@@ -40,8 +41,14 @@ CACTI = [
 ]
 CLOUD = sprite(["...####...", ".##....##.", "#........#", ".########."], 4)
 
+OVER_IDLE_MS = 8000    # game-over screen falls back to the self-playing demo after this
+
 class Scene:
     def __init__(self):
+        self.reset()
+        self.mode = "demo"    # demo (auto-plays) -> play (KEY jumps) -> over (crashed)
+
+    def reset(self):
         self.x = 60
         self.y = 0.0          # height above ground
         self.vy = 0.0
@@ -51,7 +58,40 @@ class Scene:
         self.clouds = [[80, 60], [300, 95]]
         self.dots = [random.randint(0, 400) for _ in range(12)]
 
+    def demo(self):
+        """Back to the self-playing screensaver (used when the screen is entered)."""
+        if self.mode != "demo":
+            self.reset()
+            self.mode = "demo"
+
+    def press(self):
+        """KEY went down on this screen."""
+        if self.mode == "demo":
+            self.reset()
+            self.mode = "play"
+        elif self.mode == "over":
+            if time.ticks_diff(time.ticks_ms(), self.over_at) < 600:   # ignore the panic-tap that crashed you
+                return
+            self.reset()
+            self.mode = "play"
+        if self.y == 0:
+            self.vy = 21.0
+
+    def _hit(self):
+        fb, w, h = RUN[0]
+        top = GROUND - h - self.y
+        for cx, kind in self.cacti:
+            _, cw, chh = CACTI[kind]
+            if cx < self.x + w - 8 and cx + cw > self.x + 8 and GROUND - chh < top + h - 4:
+                return True
+        return False
+
     def step(self):
+        if self.mode == "over":
+            if time.ticks_diff(time.ticks_ms(), self.over_at) > OVER_IDLE_MS:
+                self.reset()
+                self.mode = "demo"
+            return
         self.frame += 1
         for c in self.cacti:
             c[0] -= SPEED
@@ -65,15 +105,19 @@ class Scene:
                 cl[0], cl[1] = 410, random.randint(50, 110)
         self.dots = [(d - SPEED) % 400 for d in self.dots]
 
-        cx, kind = self.cacti[0]
-        gap = cx - (self.x + RUN[0][1])
-        if self.y == 0 and 0 < gap < 26:
-            self.vy = 19.0
+        if self.mode == "demo":
+            cx, kind = self.cacti[0]
+            gap = cx - (self.x + RUN[0][1])
+            if self.y == 0 and 0 < gap < 26:
+                self.vy = 21.0
         if self.y > 0 or self.vy > 0:
             self.y += self.vy
             self.vy -= 2.6
             if self.y <= 0:
                 self.y, self.vy = 0.0, 0.0
+        if self.mode == "play" and self._hit():
+            self.mode = "over"
+            self.over_at = time.ticks_ms()
 
     def draw(self):
         d = dashboard.display()
@@ -93,11 +137,22 @@ class Scene:
         if self.y > 0:
             fb, w, h = JUMP
         else:
-            blink = self.frame % 40 < 3
+            blink = self.mode == "over" or self.frame % 40 < 3
             fb, w, h = (RUN_BLINK if blink else RUN)[(self.frame // 3) % 2]
         c.blit(fb, self.x, GROUND - h + 1 - int(self.y), 0)
+        if self.mode == "over":
+            c.fill_rect(80, 70, 240, 90, 0)
+            c.rect(80, 70, 240, 90, 1)
+            d.text_large("GAME OVER", 128, 86, 2)
+            d.text_large("score %d" % self.score, 200 - 8 * len("score %d" % self.score), 118, 2)
         c.fill_rect(0, 286, 400, 14, 1)
-        c.text("BOOT: next screen   KEY: refresh / hold to talk", 4, 289, 0)
+        if self.mode == "demo":
+            hint = "KEY: play   BOOT: next screen   hold KEY: talk"
+        elif self.mode == "play":
+            hint = "KEY: jump   BOOT: next screen"
+        else:
+            hint = "KEY: play again   BOOT: next screen"
+        c.text(hint, 4, 289, 0)
         d.show()
 
 scene = Scene()

@@ -71,9 +71,28 @@ def key_action():
         time.sleep_ms(10)
     return "tap" if time.ticks_diff(time.ticks_ms(), t0) > 30 else None
 
+def pixel_key():
+    """KEY on the pixel screen: jump the instant it goes down; 'hold' after 0.4 s (voice)."""
+    global key_down_at
+    if key.value():
+        key_down_at = None
+        return None
+    now = time.ticks_ms()
+    if key_down_at is None:
+        key_down_at = now
+        critter.scene.press()
+    elif time.ticks_diff(now, key_down_at) > 400:
+        key_down_at = None
+        return "hold"
+    return None
+
+key_down_at = None
+
 def redraw():
     global shown_minute
     shown_minute = None
+    if screen == "pixel":
+        critter.scene.demo()
     if screen == "limits":
         show_limits(footer)
 
@@ -98,7 +117,7 @@ next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
 
 while True:
-    action = key_action()
+    action = pixel_key() if screen == "pixel" else key_action()
     if action == "tap":
         screen = "limits"
         show_limits("refreshing...")
