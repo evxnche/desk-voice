@@ -162,7 +162,7 @@ def _draw_static():
         #     London > Gran Canaria        (or the operator when there's no route)
         c.vline(LIST_X - 5, 36, 248, 1)
         x = LIST_X
-        font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "KM"), x, 37)
+        font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "KM") + " DIR", x, 37)
         c.hline(x, 46, 400 - x - 2, 1)
         y = 50
         for i, a in enumerate(last["aircraft"][:ROWS]):

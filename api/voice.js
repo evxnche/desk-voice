@@ -74,7 +74,42 @@ async function limitsSummary() {
 
 // Radar tools. `view` is this request's radar state; set_radar mutates it so a follow-up
 // get_nearby_flights in the same answer looks at the new place.
-function radarTools(view, changes) {
+// "zoom out to 100 km", "within 60 miles" -> nm. The model sometimes confirms a range it never
+// passed to set_radar, so the spoken number is the fallback.
+const NUMBER_WORDS = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70,
+  eighty: 80, ninety: 90,
+};
+
+// Transcripts spell numbers out ("one hundred and fifty kilometres"); turn them into digits.
+function wordsToDigits(text) {
+  const out = [];
+  let n = null;
+  for (const tok of text.split(/(\s+|-)/)) {
+    const w = tok.toLowerCase();
+    if (w in NUMBER_WORDS) n = (n ?? 0) + NUMBER_WORDS[w];
+    else if (w === 'hundred' && n !== null) n *= 100;
+    else if ((w === 'and' || /^(\s+|-)$/.test(tok)) && n !== null) continue;
+    else {
+      if (n !== null) out.push(String(n), ' ');
+      n = null;
+      out.push(tok);
+    }
+  }
+  if (n !== null) out.push(String(n));
+  return out.join('');
+}
+
+function spokenRangeNm(text) {
+  const m = /(\d+(?:\.\d+)?)\s*(km|kilomet|k\b|mi|mile|nautical)/i.exec(wordsToDigits(text));
+  if (!m) return null;
+  const n = Number(m[1]), unit = m[2].toLowerCase();
+  return unit.startsWith('naut') ? n : unit.startsWith('mi') ? n / 1.15078 : n / KM_PER_NM;
+}
+
+function radarTools(view, changes, heard) {
   return {
     get_nearby_flights: tool({
       description:
@@ -119,7 +154,8 @@ function radarTools(view, changes) {
       description:
         'Move and/or zoom the flight radar screen. Give `place` to centre it somewhere (a city, airport or landmark; ' +
         "include the country if ambiguous), `home: true` to go back to the owner's own location, and/or " +
-        '`range_km` (8-185) to zoom. The board switches to the radar screen afterwards.',
+        '`range_km` (8-185) to zoom — always pass it when the owner mentions a distance. ' +
+        'The board switches to the radar screen afterwards.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: {
@@ -130,7 +166,8 @@ function radarTools(view, changes) {
         additionalProperties: false,
       }),
       execute: async ({ place, home, range_km }) => {
-        if (range_km) view.radius = clampRadius(range_km / KM_PER_NM);
+        const nm = range_km ? range_km / KM_PER_NM : spokenRangeNm(heard);
+        if (nm) view.radius = clampRadius(nm);
         if (home) {
           Object.assign(view, view.home);
           changes.home = true;
@@ -174,6 +211,8 @@ function needsSearch(question) {
   return NEWSY.test(question) && !OWN_TOOLS.test(question);
 }
 
+const RADARY = /\b(radar|radius|range|zoom(ed)?|track(ing)?|(flights?|planes?|aircraft) (near|around|over|in|at|within))\b/i;
+
 export async function POST(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) {
@@ -207,7 +246,7 @@ export async function POST(request) {
   const changes = {};
   let text;
   try {
-    ({ text } = await generateText({
+    const result = await generateText({
       model: CHAT_MODEL,
       providerOptions: { openai: { reasoningEffort: 'minimal' } },
       system:
@@ -228,15 +267,26 @@ export async function POST(request) {
       prompt: heard,
       tools: {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
-        ...radarTools(view, changes),
+        ...radarTools(view, changes, heard),
       },
       // The free-tier model sometimes skips searching for news and answers from stale memory, so
       // news-shaped questions must use a tool on the first step (web_search is the only one that fits).
       // Naming web_search directly fails: the gateway maps it to OpenAI's 'web_search_preview'.
-      prepareStep: ({ stepNumber }) => (stepNumber === 0 && needsSearch(heard) ? { toolChoice: 'required' } : {}),
+      // Radar requests get the same treatment: without it the model sometimes claims "zoomed to 100 km"
+      // without calling set_radar.
+      prepareStep: ({ stepNumber }) =>
+        stepNumber === 0 && (needsSearch(heard) || RADARY.test(heard)) ? { toolChoice: 'required' } : {},
       stopWhen: stepCountIs(4),
       maxOutputTokens: 400,
-    }));
+    });
+    text = result.text;
+    // Backstop: a radar request with a distance always applies the distance, tool call or not.
+    const spoken = RADARY.test(heard) && spokenRangeNm(heard);
+    if (spoken && Math.abs(view.radius - clampRadius(spoken)) > 0.5) {
+      view.radius = clampRadius(spoken);
+      changes.set = true;
+    }
+    console.log('heard:', heard, '| tools:', JSON.stringify(result.steps.flatMap((st) => st.toolCalls.map((c) => [c.toolName, c.input]))));
   } catch (e) {
     // The free tier allows ~5 model calls a minute, and a tool-using answer takes 2-3 of them.
     const limited = /rate limit/i.test(String(e?.message)) || e?.lastError?.statusCode === 429;
