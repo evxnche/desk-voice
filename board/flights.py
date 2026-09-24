@@ -158,7 +158,7 @@ def _draw_static():
         font5.text(c, "%dkm" % (km // 2), CX - R // 2 + 6, CY + R // 2 - 20)
 
         # table: two lines per plane
-        #   1  EZY93ZW A320    25,450  9 E  ^
+        #   1  EZY93ZW A320    25,450  9 SW ^     (DIR = which way it's flying)
         #     London > Gran Canaria        (or the operator when there's no route)
         c.vline(LIST_X - 5, 36, 248, 1)
         x = LIST_X
@@ -170,7 +170,7 @@ def _draw_static():
                 break
             alt = _commas(a["alt"]) if a["alt"] >= 100 else "low"
             font5.text(c, "%-2d %-7s %-7s %6s %2d %s" % (
-                i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["km"], a["dir"]), x, y)
+                i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["km"], a.get("heading", a["dir"])), x, y)
             if a.get("trend"):
                 _arrow(c, 393, y, a["trend"] == "up")
             second = "%s > %s" % (a["from"], a["to"]) if a.get("from") else a["who"]
