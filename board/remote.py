@@ -30,7 +30,7 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <button onclick="go('/music?do=toggle')">&#9199;</button><button onclick="go('/music?do=next')">&#9197;</button></div>
 <div style="margin-top:8px"><a class=btn href="/spotify-login">Connect Spotify</a></div>
 <h2>LOCATION</h2><div id=loc style="margin-bottom:8px;opacity:.8">...</div>
-<button onclick="open('https://desk-voice.vercel.app/api/locate?board='+location.host,'_self')" style="width:100%%">Use my phone's location</button>
+<button id=locbtn style="width:100%%">Use my phone's location</button>
 <h2>WI-FI</h2><div id=wifi style="margin-bottom:8px;opacity:.8">...</div>
 <div class=row><input id=ssid placeholder="network name (e.g. hotspot)" autocapitalize=off autocorrect=off></div>
 <div class=row style="margin-top:8px"><input id=pw type=password placeholder="password">
@@ -52,6 +52,8 @@ a.onclick=e=>{e.preventDefault();delWifi(n)};box.append(a)}}catch(e){}}
 async function addWifi(){const s=ssid.value.trim();if(!s)return;
 await fetch('/wifi/add?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(pw.value),{method:'POST'});ssid.value=pw.value='';wifi()}
 async function delWifi(s){await fetch('/wifi/remove?ssid='+encodeURIComponent(s),{method:'POST'});wifi()}
+document.getElementById('locbtn').addEventListener('click',()=>{
+window.location.href='https://desk-voice.vercel.app/api/locate?board='+encodeURIComponent(window.location.host)});
 refresh();wifi();setInterval(refresh,3000);
 </script></body></html>"""
 
