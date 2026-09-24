@@ -7,6 +7,7 @@ import { generateSpeech, generateText, jsonSchema, stepCountIs, tool, transcribe
 import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
+import * as spotify from '../lib/spotify.js';
 
 const RATE = 15625;
 // Claude models need paid AI Gateway credits; the free tier allows gpt-5-mini.
@@ -184,8 +185,94 @@ function radarTools(view, changes, heard) {
   };
 }
 
-function reply(heard, text, pcm = new Int16Array(0), radar = null) {
-  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(radar && { radar }) }) + '\n');
+// Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
+function boardTools(cmds, spotifyRefresh) {
+  const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
+    pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music' };
+  return {
+    start_timer: tool({
+      description: 'Start a focus/countdown timer on the gadget\'s screen (big countdown, chime at the end).',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { minutes: { type: 'number' }, label: { type: 'string', description: 'e.g. Focus, Break, Tea' } },
+        required: ['minutes'],
+        additionalProperties: false,
+      }),
+      execute: async ({ minutes, label }) => {
+        cmds.push({ do: 'timer', minutes: Math.min(600, Math.max(0.5, minutes)), label: label || 'Focus' });
+        return { ok: true };
+      },
+    }),
+    timer_control: tool({
+      description: 'Pause/resume (toggle) or cancel the running timer.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { action: { type: 'string', enum: ['pause', 'resume', 'cancel'] } },
+        required: ['action'],
+        additionalProperties: false,
+      }),
+      execute: async ({ action }) => {
+        cmds.push({ do: action === 'cancel' ? 'timer_cancel' : 'timer_pause' });
+        return { ok: true };
+      },
+    }),
+    show_screen: tool({
+      description: 'Switch the gadget to a screen: limits (AI usage), today (clock + weather), pixel (game), flights (radar), music.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { screen: { type: 'string', enum: Object.keys(SCREEN_NAMES) } },
+        required: ['screen'],
+        additionalProperties: false,
+      }),
+      execute: async ({ screen }) => {
+        cmds.push({ do: 'screen', name: SCREEN_NAMES[screen] || 'limits' });
+        return { ok: true };
+      },
+    }),
+    spotify_play: tool({
+      description: 'Play music on the owner\'s Spotify. For a mood or genre ("something chill") use kind playlist; ' +
+        'for a named song use track; also album or artist.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { query: { type: 'string' }, kind: { type: 'string', enum: ['playlist', 'track', 'album', 'artist'] } },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      execute: async ({ query, kind }) => {
+        if (!spotifyRefresh) return { ok: false, error: 'Spotify is not connected to the gadget yet' };
+        try {
+          const r = await spotify.playSearch(spotifyRefresh, query, kind || 'playlist');
+          cmds.push({ do: 'screen', name: 'music' });
+          return { ok: true, ...r };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+    }),
+    spotify_control: tool({
+      description: 'Pause, resume, skip to next or go back to the previous song on Spotify.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { action: { type: 'string', enum: ['pause', 'play', 'next', 'previous'] } },
+        required: ['action'],
+        additionalProperties: false,
+      }),
+      execute: async ({ action }) => {
+        if (!spotifyRefresh) return { ok: false, error: 'Spotify is not connected to the gadget yet' };
+        try {
+          const now = await spotify.control(spotifyRefresh, action);
+          cmds.push({ do: 'screen', name: 'music' });
+          return { ok: true, now_playing: now.title ? `${now.title} by ${now.artist}` : 'nothing' };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+    }),
+  };
+}
+
+function reply(heard, text, pcm = new Int16Array(0), radar = null, board = []) {
+  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(radar && { radar }), ...(board.length && { board }) }) + '\n');
   const body = Buffer.concat([head, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]);
   // An explicit length avoids chunked encoding, which MicroPython decodes at ~13 KB/s.
   return new Response(body, {
@@ -210,6 +297,9 @@ const OWN_TOOLS = /\b(weather|temperature|rain|forecast|sunny|wind|flights?|plan
 function needsSearch(question) {
   return NEWSY.test(question) && !OWN_TOOLS.test(question);
 }
+
+// Timer, music and screen requests: same forced-tool treatment as radar requests.
+const GADGETY = /\b(timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to)\b/i;
 
 const RADARY = /\b(radar|radius|range|zoom(ed)?|track(ing)?|(flights?|planes?|aircraft) (near|around|over|in|at|within))\b/i;
 
@@ -244,6 +334,8 @@ export async function POST(request) {
     home: { lat: ipHome.lat, lon: ipHome.lon, place: ipHome.place },
   };
   const changes = {};
+  const cmds = [];
+  const spotifyRefresh = request.headers.get('x-spotify-refresh') || '';
   let text;
   try {
     const result = await generateText({
@@ -260,6 +352,8 @@ export async function POST(request) {
         'The gadget also has a flight radar screen, currently centred on ' +
         `${view.place || 'home'} with a ${Math.round(view.radius * KM_PER_NM)} km range. ` +
         'Use get_nearby_flights for questions about planes nearby, overhead or on the radar (planes 1 to 10 are numbered on screen). ' +
+        'The gadget has screens (limits, today, pixel game, flights radar, music), a focus timer and Spotify control: ' +
+        'use start_timer / timer_control, show_screen, spotify_play / spotify_control for those and confirm in a few words. ' +
         'Use set_radar when asked to show, move or zoom the radar or to look at flights somewhere, then just confirm it in one ' +
         "short sentence; don't list the flights unless asked. " +
         `It is ${now} in London.` +
@@ -268,6 +362,7 @@ export async function POST(request) {
       tools: {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes, heard),
+        ...boardTools(cmds, spotifyRefresh),
       },
       // The free-tier model sometimes skips searching for news and answers from stale memory, so
       // news-shaped questions must use a tool on the first step (web_search is the only one that fits).
@@ -275,11 +370,16 @@ export async function POST(request) {
       // Radar requests get the same treatment: without it the model sometimes claims "zoomed to 100 km"
       // without calling set_radar.
       prepareStep: ({ stepNumber }) =>
-        stepNumber === 0 && (needsSearch(heard) || RADARY.test(heard)) ? { toolChoice: 'required' } : {},
+        stepNumber === 0 && (needsSearch(heard) || RADARY.test(heard) || GADGETY.test(heard)) ? { toolChoice: 'required' } : {},
       stopWhen: stepCountIs(4),
       maxOutputTokens: 400,
     });
     text = result.text;
+    // Backstop: "start a 25 minute focus" always starts a timer, tool call or not.
+    const mins = /(\d+(?:\.\d+)?)\s*-?\s*(minute|min)s?\b/i.exec(wordsToDigits(heard));
+    if (mins && /\b(timer|focus|pomodoro|countdown|break)\b/i.test(heard) && !cmds.some((c) => c.do === 'timer')) {
+      cmds.push({ do: 'timer', minutes: Number(mins[1]), label: /\bbreak\b/i.test(heard) ? 'Break' : 'Focus' });
+    }
     // Backstop: a radar request with a distance always applies the distance, tool call or not.
     const spoken = RADARY.test(heard) && spokenRangeNm(heard);
     if (spoken && Math.abs(view.radius - clampRadius(spoken)) > 0.5) {
@@ -300,5 +400,5 @@ export async function POST(request) {
   const radar = !changes.set ? null
     : atHome ? { home: true, r: view.radius }
     : { lat: view.lat, lon: view.lon, place: view.place, r: view.radius };
-  return reply(heard, text, await speak(text), radar);
+  return reply(heard, text, await speak(text), radar, cmds);
 }

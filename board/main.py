@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime
 from machine import Pin
-import dashboard, secrets, room, critter, voice, flights
+import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
@@ -8,6 +8,7 @@ REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
 key = Pin(18, Pin.IN, Pin.PULL_UP)
 boot = Pin(0, Pin.IN, Pin.PULL_UP)
 
+network.hostname("deskpal")    # reachable as http://deskpal.local on the home Wi-Fi
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
 wlan.config(pm=wlan.PM_NONE)  # power save cuts HTTPS throughput ~3x; the board is on USB power
@@ -89,16 +90,96 @@ def pixel_key():
 key_down_at = None
 
 def redraw():
-    global shown_minute
+    global shown_minute, timer_second
     shown_minute = None
+    timer_second = None
     if screen == "flights":
         flights.enter()
+    if screen == "music":
+        music.enter()
+    if screen == "alert":
+        alerts.draw()
+    if screen == "timer_done":
+        timer.draw_done()
     if screen == "pixel":
         critter.scene.demo()
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("limits", "room", "pixel", "flights")
+SCREENS = ("limits", "room", "pixel", "flights", "music")
+# Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
+# BOOT/dismiss returns to.
+home_screen = "limits"
+
+def show(name):
+    """Switch to a screen (from BOOT, the remote page or a voice command)."""
+    global screen, home_screen
+    if name in SCREENS:
+        home_screen = name
+    screen = name
+    redraw()
+
+def leave_takeover():
+    show(home_screen)
+
+def run(cmd):
+    """One command from the remote page or the voice assistant."""
+    do = cmd.get("do")
+    if do == "screen" and cmd.get("name") in SCREENS + ("timer",):
+        show(cmd["name"])
+    elif do == "timer":
+        timer.start(float(cmd.get("minutes") or 25), cmd.get("label") or "Focus")
+        show("timer")
+    elif do == "timer_pause":
+        timer.toggle_pause()
+        if timer.active:
+            show("timer")
+    elif do == "timer_cancel":
+        timer.cancel()
+        if screen in ("timer", "timer_done"):
+            leave_takeover()
+    elif do == "music":
+        music.control(cmd.get("what") or "toggle")
+        show("music")
+    elif do == "alerts_clear":
+        alerts.clear()
+        if screen == "alert":
+            leave_takeover()
+
+def local_clock():
+    lt = room.local_time()
+    return "%02d:%02d" % (lt[3], lt[4]) if lt else ""
+
+def handle(method, path, q, body):
+    """LAN requests: the remote page, the Mac's agent hooks and the Spotify sign-in hand-off."""
+    if q.get("k") != secrets.VOICE_KEY:
+        return 401, "text/plain", "wrong or missing key"
+    if path == "/":
+        return 200, "text/html", remote.page()
+    if path == "/state":
+        return 200, "application/json", json.dumps({
+            "screen": screen, "timer": timer.status(), "music": music.status(),
+            "alert": ("%d agent alert(s)" % len(alerts.queue)) if alerts.queue else ""})
+    if path == "/agent":
+        a = json.loads(body or b"{}")
+        alerts.add(a.get("agent"), a.get("project"), "needs" if a.get("kind") == "needs" else "done",
+                   a.get("message"), local_clock())
+        pending_alert.append(alerts.queue[-1]["kind"])
+        return 200, "application/json", '{"ok":true}'
+    if path == "/spotify-token" and q.get("refresh"):
+        music.save_token(q["refresh"])
+        show("music")
+        return 200, "text/html", "<meta name=viewport content='width=device-width'><h2>Spotify connected.</h2><p>You can close this page.</p>"
+    routes = {"/screen": {"do": "screen", "name": q.get("name")},
+              "/timer": {"do": "timer", "minutes": q.get("minutes"), "label": q.get("label")},
+              "/timer/pause": {"do": "timer_pause"}, "/timer/cancel": {"do": "timer_cancel"},
+              "/music": {"do": "music", "what": q.get("do")}, "/alerts/clear": {"do": "alerts_clear"}}
+    if path in routes:
+        run(routes[path])
+        return 200, "application/json", '{"ok":true}'
+    return 404, "text/plain", "not found"
+
+pending_alert = []    # alert kinds waiting to chime (the HTTP handler must answer fast)
 
 # The radar's background fetch can hold the interpreter for ~0.5 s during the TLS handshake,
 # long enough to miss a quick tap if BOOT were only polled; an edge interrupt latches it instead.
@@ -122,6 +203,8 @@ def boot_tapped():
     return True
 
 screen = "limits"
+timer_second = None
+web = webserver.Server()
 footer = fetch()
 clock_ok = sync_clock()
 show_limits(footer)
@@ -129,8 +212,32 @@ next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
 
 while True:
+    web.poll(handle)
+    if pending_alert:
+        kind = pending_alert.pop(0)
+        if screen != "alert":
+            screen = "alert"
+            redraw()
+        else:
+            alerts.draw()
+        alerts.chime(kind)
+    if timer.finished():
+        timer.cancel()                           # label/total stay set for the done screen
+        screen = "timer_done"
+        redraw()
+        timer.chime()
+
     action = pixel_key() if screen == "pixel" else key_action()
-    if action == "tap" and screen == "flights":
+    if action == "tap" and screen in ("alert", "timer_done"):
+        if screen == "alert":
+            alerts.clear()
+        leave_takeover()
+    elif action == "tap" and screen == "timer":
+        timer.toggle_pause()
+        timer_second = None
+    elif action == "tap" and screen == "music":
+        music.control("toggle")
+    elif action == "tap" and screen == "flights":
         flights.refresh_now()
     elif action == "tap" and screen == "room":
         room.fetch_weather()
@@ -144,8 +251,13 @@ while True:
     elif action == "hold":
         try:
             result = voice.ask(key, boot, connect)
-            if result == "radar":
-                screen = "flights"               # "show flights near London": go look at them
+            cmds = result.get("board", []) if isinstance(result, dict) else []
+            if isinstance(result, dict) and result.get("radar"):
+                cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
+            if cmds:
+                for cmd in cmds:
+                    run(cmd)
+                result = "handled"
             elif result != "back":
                 end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
                 while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
@@ -157,10 +269,18 @@ while True:
             time.sleep_ms(10)
         time.sleep_ms(30)
         boot_hit = False
-        redraw()
+        if result != "handled":
+            redraw()
     elif boot_tapped():
-        screen = SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)]
-        redraw()
+        if screen == "timer":
+            timer.cancel()
+            leave_takeover()
+        elif screen in ("alert", "timer_done"):
+            if screen == "alert":
+                alerts.clear()
+            leave_takeover()
+        else:
+            show(SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)])
     if time.ticks_diff(time.ticks_ms(), next_fetch) >= 0:
         footer = fetch()
         if not clock_ok:
@@ -179,6 +299,13 @@ while True:
             shown_minute = minute
     if screen == "flights":
         flights.tick(connect)
+    if screen == "music":
+        music.tick(connect)
+    if screen == "timer":
+        sec = timer.remaining() // 1000
+        if sec != timer_second:
+            timer.draw()
+            timer_second = sec
     if screen == "pixel":
         critter.scene.step()
         critter.scene.draw()

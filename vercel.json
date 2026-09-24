@@ -8,6 +8,12 @@
     },
     "api/weather.js": {
       "maxDuration": 15
+    },
+    "api/spotify.js": {
+      "maxDuration": 15
+    },
+    "api/spotify-callback.js": {
+      "maxDuration": 15
     }
   }
 }
