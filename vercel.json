@@ -1,3 +1,10 @@
 {
-  "functions": { "api/voice.js": { "maxDuration": 60 } }
+  "functions": {
+    "api/voice.js": {
+      "maxDuration": 60
+    },
+    "api/flights.js": {
+      "maxDuration": 15
+    }
+  }
 }

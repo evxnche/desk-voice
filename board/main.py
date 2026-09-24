@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime
 from machine import Pin
-import dashboard, secrets, room, critter, voice
+import dashboard, secrets, room, critter, voice, flights
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
@@ -87,16 +87,19 @@ def pixel_key():
     return None
 
 key_down_at = None
+flights_next = 0
 
 def redraw():
-    global shown_minute
+    global shown_minute, flights_next
     shown_minute = None
+    flights_next = time.ticks_ms()
     if screen == "pixel":
         critter.scene.demo()
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("limits", "room", "pixel")
+SCREENS = ("limits", "room", "pixel", "flights")
+FLIGHTS_MS = 15000   # radar refresh while that screen is showing
 
 def pressed(pin):
     """Debounced press: True once per press, returns after release."""
@@ -118,7 +121,9 @@ shown_minute = None
 
 while True:
     action = pixel_key() if screen == "pixel" else key_action()
-    if action == "tap":
+    if action == "tap" and screen == "flights":
+        flights_next = time.ticks_ms()
+    elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
         footer = fetch()
@@ -152,6 +157,11 @@ while True:
         if minute != shown_minute:
             room.draw()
             shown_minute = minute
+    if screen == "flights" and time.ticks_diff(time.ticks_ms(), flights_next) >= 0:
+        if flights.last is None:
+            flights.draw()                   # "loading..." while the first fetch runs
+        flights.draw(flights.fetch() if connect() else "no Wi-Fi")
+        flights_next = time.ticks_add(time.ticks_ms(), FLIGHTS_MS)
     if screen == "pixel":
         critter.scene.step()
         critter.scene.draw()
