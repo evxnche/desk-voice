@@ -107,13 +107,15 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         try:
-            voice.ask(key, connect)
-            end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
-            while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
-                time.sleep_ms(50)
+            if voice.ask(key, boot, connect) != "back":
+                end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
+                while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
+                    time.sleep_ms(50)
         except Exception as e:
             dashboard.message("Voice failed", str(e))
             time.sleep(5)
+        while not boot.value():          # BOOT here means "back", not "next screen"
+            time.sleep_ms(10)
         redraw()
     elif pressed(boot):
         screen = SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)]

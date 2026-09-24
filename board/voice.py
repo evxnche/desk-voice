@@ -1,5 +1,5 @@
 # Hold-to-talk assistant: record while KEY is held, send to desk-voice, show + speak the reply.
-import json, time, requests
+import json, time, requests, _thread
 import audio, dashboard, secrets
 
 MAX_SECONDS = 12
@@ -17,7 +17,7 @@ def wrap(text, width):
         lines.append(line)
     return lines
 
-def screen(title, heard="", reply=""):
+def screen(title, heard="", reply="", hint="BOOT: back"):
     d = dashboard.display()
     d.clear(0)
     d.text_large("ASK AI", 10, 8, 2)
@@ -40,23 +40,16 @@ def screen(title, heard="", reply=""):
                 y += 11
     else:
         d.text_large(title, 10, 120, 3)
+    d.fill_rect(0, 286, 400, 14, 1)
+    d.text(hint, 4, 289, 0)
     d.show()
 
-def ask(key, connect):
-    """Run one question. `key` is the held button, `connect()` joins Wi-Fi."""
-    pcm = audio.record_while(key, MAX_SECONDS,
-                             on_start=lambda: screen("Listening..."))
-    if len(pcm) < audio.RATE * 2 // 2:               # under half a second: treat as a slip
-        return
-    screen("Thinking...")
-    if not connect():
-        screen("No Wi-Fi")
-        time.sleep(3)
-        return
+def _request(pcm, box):
+    """Worker thread: POST the recording, fill `box`, set box['done']."""
     try:
-        r = requests.post(URL, data=bytes(pcm), timeout=60,
+        r = requests.post(URL, data=pcm, timeout=60,
                           headers={"Content-Type": "application/octet-stream"})
-        status = r.status_code
+        box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
         if size:                                  # big reads: r.content crawls at ~13 KB/s
             body = bytearray(size)
@@ -69,15 +62,43 @@ def ask(key, connect):
         else:
             body = r.content
         r.close()
+        box["body"] = body
     except Exception as e:
-        screen("", reply="Couldn't reach the assistant: %s" % e)
-        time.sleep(5)
-        return
-    if status != 200:
-        screen("", reply="Assistant error %d: %s" % (status, bytes(body[:80]).decode("utf-8", "ignore")))
-        time.sleep(6)
-        return
+        box["error"] = str(e)
+    box["done"] = True
+
+def ask(key, boot, connect):
+    """One question: record while `key` is held, then show and speak the reply.
+    Returns "back" as soon as `boot` is pressed at any stage."""
+    back = lambda: not boot.value()
+    pcm = audio.record_while(key, MAX_SECONDS, stop=back,
+                             on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
+    if pcm is None or back():
+        return "back"
+    if len(pcm) < audio.RATE * 2 // 2:               # under half a second: treat as a slip
+        return None
+    screen("Thinking...")
+    if not connect():
+        screen("No Wi-Fi")
+        time.sleep(3)
+        return None
+    box = {}
+    _thread.stack_size(32 * 1024)                    # TLS needs more than the default stack
+    _thread.start_new_thread(_request, (bytes(pcm), box))
+    while "done" not in box:                         # the worker keeps going if we leave; its result is dropped
+        if back():
+            return "back"
+        time.sleep_ms(20)
+    if "error" in box:
+        screen("", reply="Couldn't reach the assistant: %s" % box["error"])
+        return None
+    body = box["body"]
+    if box["status"] != 200:
+        screen("", reply="Assistant error %d: %s" % (box["status"], bytes(body[:80]).decode("utf-8", "ignore")))
+        return None
     nl = body.find(b"\n")
     meta = json.loads(body[:nl])
-    screen("", meta.get("heard", ""), meta.get("reply", ""))
-    audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True)
+    screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
+    if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back):
+        return "back"
+    return None

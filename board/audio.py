@@ -86,25 +86,36 @@ def _es7210_init(gain=10):                        # gain step 10 = 30 dB
 
 mclk = None
 
-def _i2s(mode, sd, fmt=I2S.STEREO):
+def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
     global mclk
     if mclk is None:
         mclk = PWM(Pin(MCK), freq=MCLK_HZ, duty_u16=32768)
     return I2S(0, sck=Pin(SCK), ws=Pin(WS), sd=Pin(sd), mode=mode,
-               bits=16, format=fmt, rate=RATE, ibuf=40000)
+               bits=16, format=fmt, rate=RATE, ibuf=ibuf)
 
-def play(buf, volume=0xD0, mono=False):
-    out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO)
+TX_BUF = 16000
+
+def play(buf, volume=0xD0, mono=False, stop=None):
+    """Play 16-bit PCM. `stop()` is polled between chunks; returns False if it cut playback short."""
+    out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
     _es8311_init(volume)
     pa(1)
+    finished = True
     try:
         mv = memoryview(buf)
         for i in range(0, len(buf), 4096):
+            if stop and stop():
+                finished = False
+                break
             out.write(mv[i:i + 4096])
-        out.write(bytearray(8000))                # flush the DMA tail with silence
+        if finished:
+            # write() returns once data is queued, not played: push a full buffer of
+            # silence so the queued audio drains before the amp switches off.
+            out.write(bytearray(TX_BUF + 4096))
     finally:
         pa(0)
         out.deinit()
+    return finished
 
 def record(seconds):
     buf = bytearray(RATE * 4 * seconds)           # stereo 16-bit
@@ -119,8 +130,8 @@ def record(seconds):
         mic.deinit()
     return buf
 
-def record_while(pin, max_seconds, on_start=None):
-    """Record mono while `pin` reads 0 (button held); return the bytes captured."""
+def record_while(pin, max_seconds, on_start=None, stop=None):
+    """Record mono while `pin` reads 0 (button held); return the bytes captured, or None if `stop()` fired."""
     buf = bytearray(RATE * 2 * max_seconds)
     mv = memoryview(buf)
     mic = _i2s(I2S.RX, DIN, I2S.MONO)
@@ -133,6 +144,8 @@ def record_while(pin, max_seconds, on_start=None):
         if on_start:
             on_start()                            # I2S buffers ~1 s while this draws
         while n < len(buf) and not pin.value():
+            if stop and stop():
+                return None
             n += mic.readinto(mv[n:n + 2048])
     finally:
         mic.deinit()
