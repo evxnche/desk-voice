@@ -157,7 +157,7 @@ def handle(method, path, q, body):
     if path in ("/agent", "/spotify-token") and q.get("k") != secrets.VOICE_KEY:
         return 401, "text/plain", "wrong or missing key"
     if path == "/spotify-login":
-        return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s'>" % remote.SPOTIFY_LOGIN
+        return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s&board=%s'>" % (remote.SPOTIFY_LOGIN, wlan.ifconfig()[0])
     if path == "/":
         return 200, "text/html", remote.page()
     if path == "/state":

@@ -18,7 +18,10 @@ async function handle(request) {
   const action = url.searchParams.get('action');
 
   if (action === 'login') {
-    const q = new URLSearchParams({ client_id: process.env.SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: REDIRECT_URI, scope: SCOPES });
+    // `board` is the board's LAN address; it rides through Spotify as `state` so the callback can hand
+    // the token straight back to it without relying on the deskpal.local name.
+    const board = url.searchParams.get('board') || '';
+    const q = new URLSearchParams({ client_id: process.env.SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: REDIRECT_URI, scope: SCOPES, state: board });
     return Response.redirect(`https://accounts.spotify.com/authorize?${q}`, 302);
   }
 
