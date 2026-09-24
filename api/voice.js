@@ -5,7 +5,7 @@
 // `radar` tells the board to move/zoom its radar screen: {lat, lon, place, r} or {home: true, r}.
 import { generateSpeech, generateText, jsonSchema, stepCountIs, tool, transcribe } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
-import { centreFrom, clampRadius, geocode, getFlights, NM_PER_MILE } from '../lib/flights.js';
+import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
 
 const RATE = 15625;
@@ -85,7 +85,7 @@ function radarTools(view, changes) {
         const data = await getFlights({ ...view, detailed: 10, full: true });
         return {
           centre: view.place || 'home',
-          range_miles: data.miles,
+          range_km: data.km,
           total_aircraft: data.aircraft.length,
           nearest: data.aircraft
             .filter((a) => a.who)
@@ -93,8 +93,8 @@ function radarTools(view, changes) {
               number_on_screen: i + 1,
               operator: a.who, flight: a.flight, kind: a.kind, aircraft: a.model,
               route: a.from ? `${a.from} to ${a.to}` : 'unknown',
-              altitude_ft: a.alt, miles_away: a.miles, direction_from_centre: a.dir,
-              heading_deg: a.track, speed_mph: Math.round(a.speed / NM_PER_MILE),
+              altitude_ft: a.alt, km_away: a.km, direction_from_centre: a.dir,
+              heading_deg: a.track, speed_kmh: Math.round(a.speed * KM_PER_NM),
               climbing_or_descending: a.trend || 'level',
             })),
         };
@@ -119,18 +119,18 @@ function radarTools(view, changes) {
       description:
         'Move and/or zoom the flight radar screen. Give `place` to centre it somewhere (a city, airport or landmark; ' +
         "include the country if ambiguous), `home: true` to go back to the owner's own location, and/or " +
-        '`range_miles` (5-110) to zoom. The board switches to the radar screen afterwards.',
+        '`range_km` (8-185) to zoom. The board switches to the radar screen afterwards.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: {
           place: { type: 'string' },
           home: { type: 'boolean' },
-          range_miles: { type: 'number' },
+          range_km: { type: 'number' },
         },
         additionalProperties: false,
       }),
-      execute: async ({ place, home, range_miles }) => {
-        if (range_miles) view.radius = clampRadius(range_miles * NM_PER_MILE);
+      execute: async ({ place, home, range_km }) => {
+        if (range_km) view.radius = clampRadius(range_km / KM_PER_NM);
         if (home) {
           Object.assign(view, view.home);
           changes.home = true;
@@ -141,7 +141,7 @@ function radarTools(view, changes) {
           changes.home = false;
         }
         changes.set = true;
-        return { ok: true, centre: view.place || 'home', range_miles: Math.round(view.radius / NM_PER_MILE) };
+        return { ok: true, centre: view.place || 'home', range_km: Math.round(view.radius * KM_PER_NM) };
       },
     }),
   };
@@ -165,6 +165,13 @@ async function speak(text) {
   });
   const { rate, samples } = parseWav(Buffer.from(speech.audio.uint8Array));
   return resample(samples, rate, RATE);
+}
+
+const NEWSY = /\b(latest|news|headlines?|updates?|today|tonight|yesterday|this (week|month|year)|current(ly)?|recent(ly)?|right now|happening|war|election|president|prime minister|score|won|stock|price|release[ds]?)\b/i;
+const OWN_TOOLS = /\b(weather|temperature|rain|forecast|sunny|wind|flights?|planes?|aircraft|radar|zoom|limits?)\b/i;
+
+function needsSearch(question) {
+  return NEWSY.test(question) && !OWN_TOOLS.test(question);
 }
 
 export async function POST(request) {
@@ -194,7 +201,7 @@ export async function POST(request) {
   const ipHome = centreFrom(new URL('http://x/'), request.headers);
   const view = {
     lat: centre.lat, lon: centre.lon, place: centre.place,
-    radius: clampRadius(url.searchParams.get('r') ?? 26),
+    radius: clampRadius(url.searchParams.get('r')),
     home: { lat: ipHome.lat, lon: ipHome.lon, place: ipHome.place },
   };
   const changes = {};
@@ -206,12 +213,13 @@ export async function POST(request) {
       system:
         'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
         'Your reply is spoken aloud and shown on a tiny screen, so answer in one to three short sentences of plain speech: ' +
-        'no markdown, lists, emoji or URLs. ' +
-        'Use get_weather for any weather question (temperatures are Celsius). ' +
+        'no markdown, lists, emoji or URLs. This is a one-shot voice gadget: never ask the owner a follow-up or ' +
+        'clarifying question, just give your best answer. Never say you are unaware of an event without searching first. ' +
+        'Use get_weather for any weather question. Use metric units: km, km/h and Celsius (plane altitudes stay in feet). ' +
       'Use web_search for news, current events, prices, sports, or anything else that may have changed recently; ' +
         'otherwise answer from what you know. ' +
         'The gadget also has a flight radar screen, currently centred on ' +
-        `${view.place || 'home'} with a ${Math.round(view.radius / NM_PER_MILE)}-mile range. ` +
+        `${view.place || 'home'} with a ${Math.round(view.radius * KM_PER_NM)} km range. ` +
         'Use get_nearby_flights for questions about planes nearby, overhead or on the radar (planes 1 to 10 are numbered on screen). ' +
         'Use set_radar when asked to show, move or zoom the radar or to look at flights somewhere, then just confirm it in one ' +
         "short sentence; don't list the flights unless asked. " +
@@ -222,6 +230,10 @@ export async function POST(request) {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes),
       },
+      // The free-tier model sometimes skips searching for news and answers from stale memory, so
+      // news-shaped questions must use a tool on the first step (web_search is the only one that fits).
+      // Naming web_search directly fails: the gateway maps it to OpenAI's 'web_search_preview'.
+      prepareStep: ({ stepNumber }) => (stepNumber === 0 && needsSearch(heard) ? { toolChoice: 'required' } : {}),
       stopWhen: stepCountIs(4),
       maxOutputTokens: 400,
     }));

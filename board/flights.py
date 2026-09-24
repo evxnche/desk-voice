@@ -16,11 +16,11 @@ def _quote(s):
 try:
     view = json.load(open(VIEW_FILE))
 except Exception:
-    view = {"r": 26}
+    view = {}                   # follow the board's own location at the default 50 km range
 
 def params():
     """Query-string suffix describing the current view (shared with the voice request)."""
-    q = "&r=%s" % view.get("r", 26)
+    q = "&r=%s" % view["r"] if "r" in view else ""
     if "lat" in view:
         q += "&lat=%s&lon=%s&place=%s" % (view["lat"], view["lon"], _quote(view.get("place", "")))
     return q
@@ -28,8 +28,8 @@ def params():
 def set_view(radar):
     """Apply a voice command: {"home": true, "r": nm} or {"lat", "lon", "place", "r"}."""
     global view, last, _static, _next_fetch
-    view = {"r": radar.get("r", 26)} if radar.get("home") else {
-        "lat": radar["lat"], "lon": radar["lon"], "place": radar.get("place", ""), "r": radar.get("r", 26)}
+    view = {"r": radar["r"]} if radar.get("home") else {
+        "lat": radar["lat"], "lon": radar["lon"], "place": radar.get("place", ""), "r": radar["r"]}
     with open(VIEW_FILE, "w") as f:
         json.dump(view, f)
     last, _static = None, None            # old planes are in the wrong place/scale now
@@ -153,16 +153,16 @@ def _draw_static():
     c.hline(CX - 4, CY, 9, 1)
     c.vline(CX, CY - 4, 9, 1)
     if last:
-        miles = last.get("miles", 30)
-        font5.text(c, "%dmi" % miles, CX - R + 4, CY + R - 26)
-        font5.text(c, "%dmi" % (miles // 2), CX - R // 2 + 6, CY + R // 2 - 20)
+        km = last.get("km", 50)
+        font5.text(c, "%dkm" % km, CX - R + 4, CY + R - 26)
+        font5.text(c, "%dkm" % (km // 2), CX - R // 2 + 6, CY + R // 2 - 20)
 
         # table: two lines per plane
         #   1  EZY93ZW A320    25,450  9 E  ^
         #     London > Gran Canaria        (or the operator when there's no route)
         c.vline(LIST_X - 5, 36, 248, 1)
         x = LIST_X
-        font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "MI"), x, 37)
+        font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "KM"), x, 37)
         c.hline(x, 46, 400 - x - 2, 1)
         y = 50
         for i, a in enumerate(last["aircraft"][:ROWS]):
@@ -170,7 +170,7 @@ def _draw_static():
                 break
             alt = _commas(a["alt"]) if a["alt"] >= 100 else "low"
             font5.text(c, "%-2d %-7s %-7s %6s %2d %s" % (
-                i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["miles"], a["dir"]), x, y)
+                i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["km"], a["dir"]), x, y)
             if a.get("trend"):
                 _arrow(c, 393, y, a["trend"] == "up")
             second = "%s > %s" % (a["from"], a["to"]) if a.get("from") else a["who"]
@@ -190,7 +190,7 @@ def _draw_planes():
     c = d.canvas
     d.canvas_buffer[:] = _static
     if last:
-        scale = R / last.get("radius", 26)
+        scale = R / last["radius"]
         dt = min(60, time.ticks_diff(time.ticks_ms(), _fetched_at) / 1000)
         numbered = []
         for i, a in enumerate(last["aircraft"]):

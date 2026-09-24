@@ -13,7 +13,7 @@ export async function GET(request) {
   }
   let data;
   try {
-    data = await getFlights({ lat, lon, radius: clampRadius(url.searchParams.get('r') ?? 26), place });
+    data = await getFlights({ lat, lon, radius: clampRadius(url.searchParams.get('r')), place });
   } catch (e) {
     return new Response(String(e.message), { status: 502 });
   }

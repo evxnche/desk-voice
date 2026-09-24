@@ -67,7 +67,7 @@ def draw():
         d.text_large("C", x + 16, 142, 4)
         d.text_large(dashboard.ascii(w["condition"])[:14], 170, 142, 2)
         font5.text(c, dashboard.ascii("%s  feels like %dC" % (w.get("place", ""), w["feels_c"])), 170, 166)
-        font5.text(c, "humidity %d%%   wind %d mph" % (w["humidity"], w["wind_mph"]), 170, 177)
+        font5.text(c, "humidity %d%%   wind %d km/h" % (w["humidity"], w["wind_kmh"]), 170, 177)
         c.hline(16, 204, 368, 1)
         for i, (name, day) in enumerate((("Today", w["today"]), ("Tomorrow", w["tomorrow"]))):
             y = 216 + 26 * i
