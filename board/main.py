@@ -13,15 +13,41 @@ wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
 wlan.config(pm=wlan.PM_NONE)  # power save cuts HTTPS throughput ~3x; the board is on USB power
 
+WIFI_FILE = "wifi.json"   # extra networks added from the remote page, e.g. the phone's hotspot
+
+def saved_networks():
+    try:
+        return json.load(open(WIFI_FILE))
+    except Exception:
+        return []
+
+def save_networks(nets):
+    with open(WIFI_FILE, "w") as f:
+        json.dump(nets, f)
+
 def connect():
+    """Join the strongest known network in range: home Wi-Fi or any saved one (hotspot on the move)."""
     if wlan.isconnected():
         return True
-    dashboard.message("Joining Wi-Fi", secrets.WIFI_SSID)
-    wlan.connect(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)
-    for _ in range(40):
-        if wlan.isconnected():
-            return True
-        time.sleep(0.5)
+    known = {secrets.WIFI_SSID: secrets.WIFI_PASSWORD}
+    for n in saved_networks():
+        known[n["ssid"]] = n["password"]
+    try:
+        seen = sorted(((net[3], net[0].decode()) for net in wlan.scan() if net[0].decode() in known), reverse=True)
+    except Exception:
+        seen = []
+    order = [ssid for _, ssid in seen] or [secrets.WIFI_SSID]
+    for ssid in order:
+        dashboard.message("Joining Wi-Fi", ssid)
+        try:
+            wlan.disconnect()
+        except Exception:
+            pass
+        wlan.connect(ssid, known[ssid])
+        for _ in range(24):
+            if wlan.isconnected():
+                return True
+            time.sleep(0.5)
     return False
 
 def sync_clock():
@@ -160,6 +186,18 @@ def handle(method, path, q, body):
         return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s&board=%s'>" % (remote.SPOTIFY_LOGIN, wlan.ifconfig()[0])
     if path == "/":
         return 200, "text/html", remote.page()
+    if path == "/wifi":
+        return 200, "application/json", json.dumps({
+            "connected": wlan.config("ssid") if wlan.isconnected() else "",
+            "home": secrets.WIFI_SSID, "saved": [n["ssid"] for n in saved_networks()]})
+    if path == "/wifi/add" and q.get("ssid"):
+        nets = [n for n in saved_networks() if n["ssid"] != q["ssid"]]
+        nets.append({"ssid": q["ssid"], "password": q.get("password", "")})
+        save_networks(nets)
+        return 200, "application/json", '{"ok":true}'
+    if path == "/wifi/remove" and q.get("ssid"):
+        save_networks([n for n in saved_networks() if n["ssid"] != q["ssid"]])
+        return 200, "application/json", '{"ok":true}'
     if path == "/state":
         return 200, "application/json", json.dumps({
             "screen": screen, "timer": timer.status(), "music": music.status(),

@@ -29,6 +29,10 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <h2>MUSIC</h2><div class=row><button onclick="go('/music?do=previous')">&#9198;</button>
 <button onclick="go('/music?do=toggle')">&#9199;</button><button onclick="go('/music?do=next')">&#9197;</button></div>
 <div style="margin-top:8px"><a class=btn href="/spotify-login">Connect Spotify</a></div>
+<h2>WI-FI</h2><div id=wifi style="margin-bottom:8px;opacity:.8">...</div>
+<div class=row><input id=ssid placeholder="network name (e.g. hotspot)" autocapitalize=off autocorrect=off></div>
+<div class=row style="margin-top:8px"><input id=pw type=password placeholder="password">
+<button onclick="addWifi()">Save</button></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
 <script>
 const NAMES={limits:'Limits',room:'Today',pixel:'Pixel Pal',flights:'Flights',music:'Music'};
@@ -38,7 +42,12 @@ async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
 async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
 st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen)}catch(e){st.textContent='board not reachable'}}
-refresh();setInterval(refresh,3000);
+async function wifi(){try{const w=await(await fetch('/wifi')).json();
+document.getElementById('wifi').innerHTML='Connected to <b>'+(w.connected||'?')+'</b><br>Known: '+[w.home].concat(w.saved).map(n=>n==w.home?n:n+' <a href=# onclick="delWifi(\''+n.replace(/'/g,"\\'")+'\');return false">remove</a>').join(', ')}catch(e){}}
+async function addWifi(){const s=ssid.value.trim();if(!s)return;
+await fetch('/wifi/add?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(pw.value),{method:'POST'});ssid.value=pw.value='';wifi()}
+async function delWifi(s){await fetch('/wifi/remove?ssid='+encodeURIComponent(s),{method:'POST'});wifi()}
+refresh();wifi();setInterval(refresh,3000);
 </script></body></html>"""
 
 def page():
