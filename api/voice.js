@@ -1,7 +1,7 @@
 // Voice assistant for the ESP32-S3 RLCD desk board.
 // POST raw 16-bit little-endian mono PCM at 15625 Hz, ?k=VOICE_KEY.
 // Replies with one JSON line ({heard, reply}) + "\n" + raw PCM in the same format.
-import { generateSpeech, generateText, transcribe } from 'ai';
+import { generateSpeech, generateText, stepCountIs, transcribe } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 
 const RATE = 15625;
@@ -116,9 +116,13 @@ export async function POST(request) {
       'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
       'Your reply is spoken aloud and shown on a tiny screen, so answer in one to three short sentences of plain speech: ' +
       'no markdown, lists, emoji or URLs. ' +
+      'Use web_search for news, current events, prices, weather, sports, or anything that may have changed recently; ' +
+      'otherwise answer from what you know. ' +
       `It is ${now} in London.` +
       (limits ? ` The owner's AI coding agent usage limits right now: ${limits}.` : ''),
     prompt: heard,
+    tools: { web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }) },
+    stopWhen: stepCountIs(3),
     maxOutputTokens: 400,
   });
   return reply(heard, text, await speak(text));
