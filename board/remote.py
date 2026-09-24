@@ -28,19 +28,18 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div class=row style="margin-top:8px"><button onclick="go('/timer/pause')">Pause / resume</button><button onclick="go('/timer/cancel')">Cancel</button></div>
 <h2>MUSIC</h2><div class=row><button onclick="go('/music?do=previous')">&#9198;</button>
 <button onclick="go('/music?do=toggle')">&#9199;</button><button onclick="go('/music?do=next')">&#9197;</button></div>
-<div style="margin-top:8px"><a class=btn href="%SPOTIFY%">Connect Spotify</a></div>
+<div style="margin-top:8px"><a class=btn href="/spotify-login">Connect Spotify</a></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
 <script>
-const K=new URLSearchParams(location.search).get('k')||'';
 const NAMES={limits:'Limits',room:'Today',pixel:'Pixel Pal',flights:'Flights',music:'Music'};
 const sc=document.getElementById('screens');
 for(const n in NAMES){const b=document.createElement('button');b.textContent=NAMES[n];b.id='s-'+n;b.onclick=()=>go('/screen?name='+n);sc.appendChild(b)}
-async function go(p){await fetch(p+(p.includes('?')?'&':'?')+'k='+K,{method:'POST'}).catch(()=>{});refresh()}
-async function refresh(){try{const s=await(await fetch('/state?k='+K)).json();
+async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
+async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
 st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen)}catch(e){st.textContent='board not reachable'}}
 refresh();setInterval(refresh,3000);
 </script></body></html>"""
 
 def page():
-    return PAGE.replace("%SPOTIFY%", SPOTIFY_LOGIN).replace("%%", "%")
+    return PAGE.replace("%%", "%")

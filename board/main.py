@@ -152,8 +152,12 @@ def local_clock():
 
 def handle(method, path, q, body):
     """LAN requests: the remote page, the Mac's agent hooks and the Spotify sign-in hand-off."""
-    if q.get("k") != secrets.VOICE_KEY:
+    # The remote page and its buttons are open to anyone on the home Wi-Fi; only the Mac's agent
+    # alerts and the Spotify token hand-off need the key.
+    if path in ("/agent", "/spotify-token") and q.get("k") != secrets.VOICE_KEY:
         return 401, "text/plain", "wrong or missing key"
+    if path == "/spotify-login":
+        return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s'>" % remote.SPOTIFY_LOGIN
     if path == "/":
         return 200, "text/html", remote.page()
     if path == "/state":
