@@ -1,7 +1,7 @@
 # Room screen: UK local time (from NTP) + onboard SHTC3 temperature/humidity.
 import time
 from machine import I2C, Pin
-import dashboard
+import dashboard, battery
 
 i2c = I2C(0, scl=Pin(14), sda=Pin(13), freq=100000)
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -38,6 +38,7 @@ def draw():
     d = dashboard.display()
     d.clear(0)
     d.text_large("ROOM", 10, 8, 2)
+    battery.draw(d, 204, 8)
     lt = local_time()
     if lt:
         date = "%s %d %s" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1])

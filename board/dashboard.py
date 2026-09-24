@@ -1,5 +1,5 @@
 from machine import Pin, SPI
-import rlcd
+import rlcd, battery
 
 W, H = 400, 300
 _display = None
@@ -28,6 +28,7 @@ def draw(data, footer=""):
     d = display()
     d.clear(0)
     d.text_large("AGENT LIMITS", 10, 8, 2)
+    battery.draw(d, 392, 8)
     d.text(ascii(data.get("subtitle", "")), 10, 30, 1)
     d.line(0, 42, W, 42, 1)
 
