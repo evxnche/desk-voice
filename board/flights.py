@@ -1,16 +1,43 @@
 # Radar screen: aircraft near home (desk-voice /api/flights). The nearest few are numbered on
 # the radar and described in plain English in the list on the right. Between fetches each plane
 # glides along its track at its ground speed; fetches run in a background thread.
-import math, requests, time, _thread
+import math, requests, time, _thread, json
 from array import array
-import dashboard, secrets
+import dashboard, secrets, font5
 
 URL = secrets.VOICE_URL.replace("/api/voice", "/api/flights") + "?k=" + secrets.VOICE_KEY
-if hasattr(secrets, "HOME_LAT"):
-    URL += "&lat=%s&lon=%s" % (secrets.HOME_LAT, secrets.HOME_LON)
+VIEW_FILE = "radar.json"
 
-CX, CY, R = 106, 164, 100       # radar centre and radius in pixels
-LIST_X = 216
+def _quote(s):
+    return "".join(c if c.isalpha() or c.isdigit() or c in "-_." else "%%%02X" % ord(c) for c in s)
+
+# Where the radar looks: {"r": nm} follows the board's own location (IP-based);
+# adding lat/lon/place pins it somewhere else. Set by voice ("show flights near London").
+try:
+    view = json.load(open(VIEW_FILE))
+except Exception:
+    view = {"r": 26}
+
+def params():
+    """Query-string suffix describing the current view (shared with the voice request)."""
+    q = "&r=%s" % view.get("r", 26)
+    if "lat" in view:
+        q += "&lat=%s&lon=%s&place=%s" % (view["lat"], view["lon"], _quote(view.get("place", "")))
+    return q
+
+def set_view(radar):
+    """Apply a voice command: {"home": true, "r": nm} or {"lat", "lon", "place", "r"}."""
+    global view, last, _static, _next_fetch
+    view = {"r": radar.get("r", 26)} if radar.get("home") else {
+        "lat": radar["lat"], "lon": radar["lon"], "place": radar.get("place", ""), "r": radar.get("r", 26)}
+    with open(VIEW_FILE, "w") as f:
+        json.dump(view, f)
+    last, _static = None, None            # old planes are in the wrong place/scale now
+    _next_fetch = time.ticks_ms()
+
+CX, CY, R = 98, 164, 94         # radar centre and radius in pixels
+LIST_X = 202                    # table: 10 rows in the 5x7 font
+ROWS = 10
 
 FETCH_MS = 15000
 FRAME_MS = 1000         # a 400 kt jet moves ~0.4 px/s at this scale, so 1 fps looks continuous
@@ -27,7 +54,7 @@ _footer = ""
 def _worker():
     global _incoming, _busy
     try:
-        r = requests.get(URL, timeout=15)
+        r = requests.get(URL + params(), timeout=15)
         if r.status_code == 200:
             _incoming = (r.json(), "")
         else:
@@ -116,39 +143,41 @@ def _draw_static():
     d.text_large("FLIGHTS", 10, 8, 2)
     if last:
         n = len(last["aircraft"])
-        label = dashboard.ascii("%d plane%s near %s" % (n, "" if n == 1 else "s", last.get("place", "") or "you"))[:30]
-        c.text(label, 392 - 8 * len(label), 13, 1)
+        label = dashboard.ascii("%d plane%s near %s" % (n, "" if n == 1 else "s", last.get("place", "") or "you"))[:36]
+        font5.text(c, label, 394 - 6 * len(label), 13)
     d.line(0, 32, 400, 32, 1)
 
     for rr in (R, R // 2):
         c.ellipse(CX, CY, rr, rr, 1)
-    c.text("N", CX - 3, CY - R - 10, 1)
+    font5.text(c, "N", CX - 2, CY - R - 10)
     c.hline(CX - 4, CY, 9, 1)
     c.vline(CX, CY - 4, 9, 1)
-    c.text("you", CX - 11, CY + 7, 1)
     if last:
         miles = last.get("miles", 30)
-        c.text("%dmi" % miles, CX - R + 2, CY + R - 30, 1)
-        c.text("%dmi" % (miles // 2), CX - R // 2 + 4, CY + R // 2 - 22, 1)
+        font5.text(c, "%dmi" % miles, CX - R + 4, CY + R - 26)
+        font5.text(c, "%dmi" % (miles // 2), CX - R // 2 + 6, CY + R // 2 - 20)
 
-        c.vline(LIST_X - 6, 38, 246, 1)
-        y = 38
-        for i, a in enumerate(last["aircraft"]):
+        # table: two lines per plane
+        #   1  EZY93ZW A320    25,450  9 E  ^
+        #     London > Gran Canaria        (or the operator when there's no route)
+        c.vline(LIST_X - 5, 36, 248, 1)
+        x = LIST_X
+        font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "MI"), x, 37)
+        c.hline(x, 46, 400 - x - 2, 1)
+        y = 50
+        for i, a in enumerate(last["aircraft"][:ROWS]):
             if "who" not in a:
                 break
-            d.text_large(str(i + 1), LIST_X, y + 6, 2)
-            tx = LIST_X + 20
-            c.text(dashboard.ascii(a["who"])[:20], tx, y, 1)
-            c.text(dashboard.ascii(a["where"])[:20], tx, y + 10, 1)
-            info = "%sft %dmi %s" % (_commas(a["alt"]), a["miles"], a["dir"]) if a["alt"] >= 100 else "low %dmi %s" % (a["miles"], a["dir"])
-            c.text(info, tx, y + 20, 1)
+            alt = _commas(a["alt"]) if a["alt"] >= 100 else "low"
+            font5.text(c, "%-2d %-7s %-7s %6s %2d %s" % (
+                i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["miles"], a["dir"]), x, y)
             if a.get("trend"):
-                _arrow(c, tx + 8 * len(info) + 4, y + 20, a["trend"] == "up")
-            if y > 38:
-                c.hline(LIST_X, y - 4, 400 - LIST_X - 4, 1)
-            y += 41
+                _arrow(c, 393, y, a["trend"] == "up")
+            second = "%s > %s" % (a["from"], a["to"]) if a.get("from") else a["who"]
+            font5.text(c, "   " + dashboard.ascii(second)[:29], x, y + 9)
+            y += 23
         if not last["aircraft"]:
-            c.text("no aircraft nearby", LIST_X, 44, 1)
+            font5.text(c, "no aircraft nearby", x, 52)
     else:
         d.text_large("loading...", CX - 76, CY - 8, 2)
 
@@ -175,6 +204,7 @@ def _draw_planes():
             else:
                 _plane(c, px, py, a["track"], 6, False)
         for n, px, py in numbered:             # numbers last so planes never cover them
-            c.fill_rect(px + 5, py - 12, 10, 11, 0)
-            c.text(str(n), px + 6, py - 10, 1)
+            w = 6 * len(str(n))
+            c.fill_rect(px + 5, py - 11, w + 2, 10, 0)
+            font5.text(c, str(n), px + 6, py - 10)
     d.show()

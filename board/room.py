@@ -1,24 +1,29 @@
-# Room screen: UK local time (from NTP) + onboard SHTC3 temperature/humidity.
-import time
-from machine import I2C, Pin
-import dashboard, battery
+# Today screen: UK local time (from NTP) + outside weather (desk-voice /api/weather -> Open-Meteo).
+import time, requests
+import dashboard, battery, font5, secrets
 
-i2c = I2C(0, scl=Pin(14), sda=Pin(13), freq=100000)
+WEATHER_URL = secrets.VOICE_URL.replace("/api/voice", "/api/weather") + "?k=" + secrets.VOICE_KEY
+WEATHER_MS = 10 * 60 * 1000
+
 DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
-def climate():
-    """(temp C, humidity %) from the SHTC3, or None if it doesn't answer."""
+weather = None
+_weather_at = None
+
+def weather_due():
+    return _weather_at is None or time.ticks_diff(time.ticks_ms(), _weather_at) >= WEATHER_MS
+
+def fetch_weather():
+    global weather, _weather_at
+    _weather_at = time.ticks_ms()               # also paces retries after a failure
     try:
-        i2c.writeto(0x70, b"\x35\x17")            # wake
-        time.sleep_ms(1)
-        i2c.writeto(0x70, b"\x78\x66")            # measure, T first
-        time.sleep_ms(20)
-        d = i2c.readfrom(0x70, 6)
-        i2c.writeto(0x70, b"\xb0\x98")            # sleep
-    except OSError:
-        return None
-    return -45 + 175 * ((d[0] << 8) | d[1]) / 65536, 100 * ((d[3] << 8) | d[4]) / 65536
+        r = requests.get(WEATHER_URL, timeout=15)
+        if r.status_code == 200:
+            weather = r.json()
+        r.close()
+    except Exception:
+        pass
 
 def _uk_offset(t):
     """BST (+1h) from 01:00 UTC on the last Sunday of March to the last Sunday of October."""
@@ -34,28 +39,45 @@ def local_time():
         return None
     return time.localtime(t + _uk_offset(t))
 
+def _degrees(c, x, y, r):
+    c.ellipse(x + r, y + r, r, r, 1)
+
 def draw():
     d = dashboard.display()
+    c = d.canvas
     d.clear(0)
-    d.text_large("ROOM", 10, 8, 2)
-    battery.draw(d, 204, 8)
+    d.text_large("TODAY", 10, 8, 2)
+    battery.draw(d, 212, 8)
     lt = local_time()
     if lt:
         date = "%s %d %s" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1])
         d.text_large(date, 390 - 16 * len(date), 8, 2)
-        d.text_large("%02d:%02d" % (lt[3], lt[4]), 40, 60, 8)
+        d.text_large("%02d:%02d" % (lt[3], lt[4]), 40, 50, 8)
     else:
-        d.text_large("--:--", 40, 60, 8)
+        d.text_large("--:--", 40, 50, 8)
     d.line(0, 32, 400, 32, 1)
-    d.line(0, 150, 400, 150, 1)
-    c = climate()
-    d.text("TEMPERATURE", 20, 168, 1)
-    d.text("HUMIDITY", 230, 168, 1)
-    if c:
-        d.text_large("%.1fC" % c[0], 20, 190, 4)
-        d.text_large("%d%%" % round(c[1]), 230, 190, 4)
+    d.line(0, 128, 400, 128, 1)
+
+    w = weather
+    if w:
+        temp = "%d" % w["temp_c"]
+        d.text_large(temp, 16, 142, 6)
+        x = 16 + 48 * len(temp)
+        _degrees(c, x + 2, 142, 5)
+        d.text_large("C", x + 16, 142, 4)
+        d.text_large(dashboard.ascii(w["condition"])[:14], 170, 142, 2)
+        font5.text(c, dashboard.ascii("%s  feels like %dC" % (w.get("place", ""), w["feels_c"])), 170, 166)
+        font5.text(c, "humidity %d%%   wind %d mph" % (w["humidity"], w["wind_mph"]), 170, 177)
+        c.hline(16, 204, 368, 1)
+        for i, (name, day) in enumerate((("Today", w["today"]), ("Tomorrow", w["tomorrow"]))):
+            y = 216 + 26 * i
+            d.text(name, 16, y, 1)
+            font5.text(c, dashboard.ascii(day["condition"])[:18], 100, y)
+            font5.text(c, "%d-%dC" % (day["low_c"], day["high_c"]), 222, y)
+            font5.text(c, "rain %d%%" % day["rain_chance"], 300, y)
     else:
-        d.text_large("sensor?", 20, 190, 2)
-    d.fill_rect(0, 286, 400, 14, 1)
+        d.text_large("weather loading...", 16, 180, 2)
+
+    c.fill_rect(0, 286, 400, 14, 1)
     d.text("BOOT: next screen   KEY: refresh / hold to talk", 4, 289, 0)
     d.show()

@@ -132,6 +132,9 @@ while True:
     action = pixel_key() if screen == "pixel" else key_action()
     if action == "tap" and screen == "flights":
         flights.refresh_now()
+    elif action == "tap" and screen == "room":
+        room.fetch_weather()
+        shown_minute = None
     elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
@@ -140,7 +143,10 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         try:
-            if voice.ask(key, boot, connect) != "back":
+            result = voice.ask(key, boot, connect)
+            if result == "radar":
+                screen = "flights"               # "show flights near London": go look at them
+            elif result != "back":
                 end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
                 while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
                     time.sleep_ms(50)
@@ -163,6 +169,9 @@ while True:
             show_limits(footer)
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     if screen == "room":
+        if room.weather_due() and connect():
+            room.fetch_weather()
+            shown_minute = None
         lt = room.local_time()
         minute = lt[4] if lt else -1
         if minute != shown_minute:

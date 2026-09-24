@@ -1,6 +1,6 @@
 # Hold-to-talk assistant: record while KEY is held, send to desk-voice, show + speak the reply.
 import json, time, requests, _thread
-import audio, dashboard, secrets
+import audio, dashboard, secrets, flights
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -47,7 +47,7 @@ def screen(title, heard="", reply="", hint="BOOT: back"):
 def _request(pcm, box):
     """Worker thread: POST the recording, fill `box`, set box['done']."""
     try:
-        r = requests.post(URL, data=pcm, timeout=60,
+        r = requests.post(URL + flights.params(), data=pcm, timeout=60,
                           headers={"Content-Type": "application/octet-stream"})
         box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
@@ -69,7 +69,7 @@ def _request(pcm, box):
 
 def ask(key, boot, connect):
     """One question: record while `key` is held, then show and speak the reply.
-    Returns "back" as soon as `boot` is pressed at any stage."""
+    Returns "back" as soon as `boot` is pressed at any stage, "radar" if the answer moved the radar."""
     back = lambda: not boot.value()
     pcm = audio.record_while(key, MAX_SECONDS, stop=back,
                              on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
@@ -99,6 +99,8 @@ def ask(key, boot, connect):
     nl = body.find(b"\n")
     meta = json.loads(body[:nl])
     screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
+    if meta.get("radar"):
+        flights.set_view(meta["radar"])
     if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back):
         return "back"
-    return None
+    return "radar" if meta.get("radar") else None

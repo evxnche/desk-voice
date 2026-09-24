@@ -13,7 +13,14 @@ def display():
     return _display
 
 _SUBS = {"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-",
-         "\u2014": "-", "\u2026": "...", "\u00b0": "", "\u00a0": " "}
+         "\u2014": "-", "\u2026": "...", "\u00b0": "", "\u00a0": " ", "\u00df": "ss"}
+# Accented letters fold to their base letter (place names like Duesseldorf, Cancun, Malaga).
+for _base, _accented in (("a", "\u00e0\u00e1\u00e2\u00e3\u00e4\u00e5"), ("e", "\u00e8\u00e9\u00ea\u00eb"),
+                         ("i", "\u00ec\u00ed\u00ee\u00ef"), ("o", "\u00f2\u00f3\u00f4\u00f5\u00f6\u00f8"),
+                         ("u", "\u00f9\u00fa\u00fb\u00fc"), ("c", "\u00e7"), ("n", "\u00f1")):
+    for _ch in _accented:
+        _SUBS[_ch] = _base
+        _SUBS[chr(ord(_ch) - 32)] = _base.upper()   # Latin-1 capitals sit 32 below; MicroPython can't .upper() them
 
 def ascii(s):
     return "".join(_SUBS.get(c, c if 32 <= ord(c) < 127 else "-") for c in str(s))

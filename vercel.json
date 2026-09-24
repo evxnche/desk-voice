@@ -5,6 +5,9 @@
     },
     "api/flights.js": {
       "maxDuration": 15
+    },
+    "api/weather.js": {
+      "maxDuration": 15
     }
   }
 }
