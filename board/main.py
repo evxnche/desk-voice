@@ -87,29 +87,38 @@ def pixel_key():
     return None
 
 key_down_at = None
-flights_next = 0
 
 def redraw():
-    global shown_minute, flights_next
+    global shown_minute
     shown_minute = None
-    flights_next = time.ticks_ms()
+    if screen == "flights":
+        flights.enter()
     if screen == "pixel":
         critter.scene.demo()
     if screen == "limits":
         show_limits(footer)
 
 SCREENS = ("limits", "room", "pixel", "flights")
-FLIGHTS_MS = 15000   # radar refresh while that screen is showing
 
-def pressed(pin):
-    """Debounced press: True once per press, returns after release."""
-    if pin.value():
+# The radar's background fetch can hold the interpreter for ~0.5 s during the TLS handshake,
+# long enough to miss a quick tap if BOOT were only polled; an edge interrupt latches it instead.
+boot_hit = False
+
+def _on_boot(pin):
+    global boot_hit
+    boot_hit = True
+
+boot.irq(trigger=Pin.IRQ_FALLING, handler=_on_boot)
+
+def boot_tapped():
+    """True once per BOOT press (latched by the IRQ); returns after release."""
+    global boot_hit
+    if not boot_hit and boot.value():
         return False
-    time.sleep_ms(30)
-    if pin.value():
-        return False
-    while not pin.value():
+    while not boot.value():
         time.sleep_ms(10)
+    time.sleep_ms(30)
+    boot_hit = False                     # swallow release bounce
     return True
 
 screen = "limits"
@@ -122,7 +131,7 @@ shown_minute = None
 while True:
     action = pixel_key() if screen == "pixel" else key_action()
     if action == "tap" and screen == "flights":
-        flights_next = time.ticks_ms()
+        flights.refresh_now()
     elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
@@ -140,8 +149,10 @@ while True:
             time.sleep(5)
         while not boot.value():          # BOOT here means "back", not "next screen"
             time.sleep_ms(10)
+        time.sleep_ms(30)
+        boot_hit = False
         redraw()
-    elif pressed(boot):
+    elif boot_tapped():
         screen = SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)]
         redraw()
     if time.ticks_diff(time.ticks_ms(), next_fetch) >= 0:
@@ -157,11 +168,8 @@ while True:
         if minute != shown_minute:
             room.draw()
             shown_minute = minute
-    if screen == "flights" and time.ticks_diff(time.ticks_ms(), flights_next) >= 0:
-        if flights.last is None:
-            flights.draw()                   # "loading..." while the first fetch runs
-        flights.draw(flights.fetch() if connect() else "no Wi-Fi")
-        flights_next = time.ticks_add(time.ticks_ms(), FLIGHTS_MS)
+    if screen == "flights":
+        flights.tick(connect)
     if screen == "pixel":
         critter.scene.step()
         critter.scene.draw()

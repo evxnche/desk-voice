@@ -92,6 +92,7 @@ export async function GET(request) {
       dist: Math.round(a.dst * 10) / 10, // nm, for plotting
       bearing: Math.round(a.dir),
       track: Math.round(a.track ?? 0),
+      speed: Math.round(a.gs ?? 0), // knots; the board uses it to glide planes between refreshes
       ...(i < DETAILED && {
         ...details[i],
         miles: Math.round(a.dst * 1.15078),
