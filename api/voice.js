@@ -128,7 +128,7 @@ function radarTools(view, changes, heard) {
               number_on_screen: i + 1,
               operator: a.who, flight: a.flight, kind: a.kind, aircraft: a.model,
               route: a.from ? `${a.from} to ${a.to}` : 'unknown',
-              altitude_ft: a.alt, km_away: a.km, direction_from_centre: a.dir,
+              altitude_ft: a.alt, km_away: a.km, direction_from_centre: a.from_centre, flying_towards: a.heading,
               heading_deg: a.track, speed_kmh: Math.round(a.speed * KM_PER_NM),
               climbing_or_descending: a.trend || 'level',
             })),
