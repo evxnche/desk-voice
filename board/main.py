@@ -184,6 +184,8 @@ def handle(method, path, q, body):
     return 404, "text/plain", "not found"
 
 pending_alert = []    # alert kinds waiting to chime (the HTTP handler must answer fast)
+ALERT_MS = 3000       # agent alerts dismiss themselves after this
+alert_until = 0
 
 # The radar's background fetch can hold the interpreter for ~0.5 s during the TLS handshake,
 # long enough to miss a quick tap if BOOT were only polled; an edge interrupt latches it instead.
@@ -225,6 +227,10 @@ while True:
         else:
             alerts.draw()
         alerts.chime(kind)
+        alert_until = time.ticks_add(time.ticks_ms(), ALERT_MS)
+    if screen == "alert" and time.ticks_diff(time.ticks_ms(), alert_until) >= 0:
+        alerts.clear()                           # gone after a glance; the chime already got your attention
+        leave_takeover()
     if timer.finished():
         timer.cancel()                           # label/total stay set for the done screen
         screen = "timer_done"
