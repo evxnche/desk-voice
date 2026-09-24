@@ -12,8 +12,11 @@ def display():
         _display = rlcd.RLCD(spi, cs=Pin(40), dc=Pin(5), rst=Pin(41))
     return _display
 
+_SUBS = {"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"', "\u2013": "-",
+         "\u2014": "-", "\u2026": "...", "\u00b0": "", "\u00a0": " "}
+
 def ascii(s):
-    return "".join(c if 32 <= ord(c) < 127 else "-" for c in str(s))
+    return "".join(_SUBS.get(c, c if 32 <= ord(c) < 127 else "-") for c in str(s))
 
 def bar(d, x, y, w, h, pct):
     d.rect(x, y, w, h, 1)

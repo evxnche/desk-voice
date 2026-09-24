@@ -5,6 +5,9 @@ import { generateSpeech, generateText, transcribe } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 
 const RATE = 15625;
+// Claude models need paid AI Gateway credits; the free tier allows gpt-5-mini.
+// After topping up, switch to 'anthropic/claude-haiku-4.5' (and drop providerOptions).
+const CHAT_MODEL = 'openai/gpt-5-mini';
 const MAX_BYTES = RATE * 2 * 15; // 15 s of audio
 
 function toWav(samples, rate) {
@@ -67,8 +70,10 @@ async function limitsSummary() {
 
 function reply(heard, text, pcm = new Int16Array(0)) {
   const head = Buffer.from(JSON.stringify({ heard, reply: text }) + '\n');
-  return new Response(Buffer.concat([head, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]), {
-    headers: { 'Content-Type': 'application/octet-stream' },
+  const body = Buffer.concat([head, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]);
+  // An explicit length avoids chunked encoding, which MicroPython decodes at ~13 KB/s.
+  return new Response(body, {
+    headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
   });
 }
 
@@ -105,7 +110,8 @@ export async function POST(request) {
 
   const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
   const { text } = await generateText({
-    model: 'anthropic/claude-haiku-4.5',
+    model: CHAT_MODEL,
+    providerOptions: { openai: { reasoningEffort: 'minimal' } },
     system:
       'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
       'Your reply is spoken aloud and shown on a tiny screen, so answer in one to three short sentences of plain speech: ' +
@@ -113,7 +119,7 @@ export async function POST(request) {
       `It is ${now} in London.` +
       (limits ? ` The owner's AI coding agent usage limits right now: ${limits}.` : ''),
     prompt: heard,
-    maxOutputTokens: 200,
+    maxOutputTokens: 400,
   });
   return reply(heard, text, await speak(text));
 }

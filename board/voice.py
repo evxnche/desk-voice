@@ -20,7 +20,7 @@ def wrap(text, width):
 def screen(title, heard="", reply=""):
     d = dashboard.display()
     d.clear(0)
-    d.text_large("ASK CLAUDE", 10, 8, 2)
+    d.text_large("ASK AI", 10, 8, 2)
     d.line(0, 32, 400, 32, 1)
     y = 44
     if heard:
@@ -56,15 +56,25 @@ def ask(key, connect):
     try:
         r = requests.post(URL, data=bytes(pcm), timeout=60,
                           headers={"Content-Type": "application/octet-stream"})
-        body = r.content
         status = r.status_code
+        size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
+        if size:                                  # big reads: r.content crawls at ~13 KB/s
+            body = bytearray(size)
+            mv, got = memoryview(body), 0
+            while got < size:
+                n = r.raw.readinto(mv[got:got + 16384])
+                if not n:
+                    break
+                got += n
+        else:
+            body = r.content
         r.close()
     except Exception as e:
         screen("", reply="Couldn't reach the assistant: %s" % e)
         time.sleep(5)
         return
     if status != 200:
-        screen("", reply="Assistant error %d: %s" % (status, body[:80].decode("utf-8", "ignore")))
+        screen("", reply="Assistant error %d: %s" % (status, bytes(body[:80]).decode("utf-8", "ignore")))
         time.sleep(6)
         return
     nl = body.find(b"\n")

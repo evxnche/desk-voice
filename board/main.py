@@ -10,6 +10,7 @@ boot = Pin(0, Pin.IN, Pin.PULL_UP)
 
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
+wlan.config(pm=wlan.PM_NONE)  # power save cuts HTTPS throughput ~3x; the board is on USB power
 
 def connect():
     if wlan.isconnected():
