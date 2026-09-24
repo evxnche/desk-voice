@@ -1,6 +1,6 @@
 # Hold-to-talk assistant: record while KEY is held, send to desk-voice, show + speak the reply.
 import json, time, requests, _thread
-import audio, dashboard, secrets, flights, music
+import audio, dashboard, secrets, flights, music, home
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -49,7 +49,7 @@ def _request(pcm, box):
     try:
         hdrs = {"Content-Type": "application/octet-stream"}
         hdrs.update(music.headers())               # lets "play something chill" reach Spotify
-        r = requests.post(URL + flights.params(), data=pcm, timeout=60, headers=hdrs)
+        r = requests.post(URL + flights.params() + home.query(), data=pcm, timeout=60, headers=hdrs)
         box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
         if size:                                  # big reads: r.content crawls at ~13 KB/s

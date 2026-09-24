@@ -1,6 +1,6 @@
 # Today screen: UK local time (from NTP) + outside weather (desk-voice /api/weather -> Open-Meteo).
 import time, requests
-import dashboard, battery, font5, secrets
+import dashboard, battery, font5, secrets, home
 
 WEATHER_URL = secrets.VOICE_URL.replace("/api/voice", "/api/weather") + "?k=" + secrets.VOICE_KEY
 WEATHER_MS = 10 * 60 * 1000
@@ -18,7 +18,7 @@ def fetch_weather():
     global weather, _weather_at
     _weather_at = time.ticks_ms()               # also paces retries after a failure
     try:
-        r = requests.get(WEATHER_URL, timeout=15)
+        r = requests.get(WEATHER_URL + home.query(), timeout=15)
         if r.status_code == 200:
             weather = r.json()
         r.close()

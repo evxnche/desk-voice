@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime
 from machine import Pin
-import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver
+import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
@@ -25,29 +25,43 @@ def save_networks(nets):
     with open(WIFI_FILE, "w") as f:
         json.dump(nets, f)
 
+def _scan(known):
+    """Known networks in range, home first, then the rest by signal strength."""
+    for attempt in (0, 1):
+        try:
+            wlan.disconnect()                      # a stuck auto-reconnect makes scans come back empty
+        except Exception:
+            pass
+        try:
+            found = {n[0].decode(): n[3] for n in wlan.scan()}
+        except Exception:
+            found = {}
+        if found or attempt:
+            break
+        wlan.active(False)                         # radio wedged ("no AP found", empty scans): restart it
+        time.sleep_ms(500)
+        wlan.active(True)
+        time.sleep_ms(500)
+    return sorted((s for s in known if s in found), key=lambda s: (s != secrets.WIFI_SSID, -found[s]))
+
 def connect():
-    """Join the strongest known network in range: home Wi-Fi or any saved one (hotspot on the move)."""
+    """Join home Wi-Fi if it's in range, else the strongest saved network (the hotspot on the move)."""
     if wlan.isconnected():
         return True
     known = {secrets.WIFI_SSID: secrets.WIFI_PASSWORD}
     for n in saved_networks():
         known[n["ssid"]] = n["password"]
-    try:
-        seen = sorted(((net[3], net[0].decode()) for net in wlan.scan() if net[0].decode() in known), reverse=True)
-    except Exception:
-        seen = []
-    order = [ssid for _, ssid in seen] or [secrets.WIFI_SSID]
-    for ssid in order:
+    for ssid in _scan(known) or [secrets.WIFI_SSID]:
         dashboard.message("Joining Wi-Fi", ssid)
-        try:
-            wlan.disconnect()
-        except Exception:
-            pass
         wlan.connect(ssid, known[ssid])
         for _ in range(24):
             if wlan.isconnected():
                 return True
             time.sleep(0.5)
+        try:
+            wlan.disconnect()
+        except Exception:
+            pass
     return False
 
 def sync_clock():
@@ -186,8 +200,22 @@ def handle(method, path, q, body):
         return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s&board=%s'>" % (remote.SPOTIFY_LOGIN, wlan.ifconfig()[0])
     if path == "/":
         return 200, "text/html", remote.page()
+    if path == "/location":
+        try:
+            lat, lon = float(q["lat"]), float(q["lon"])
+        except Exception:
+            return 400, "text/plain", "bad location"
+        home.save(lat, lon, q.get("place", ""))
+        room.fetch_weather()                     # weather and radar re-centre on the new spot
+        flights.last = None
+        flights.refresh_now()
+        redraw()
+        return 200, "text/html", ("<meta name=viewport content='width=device-width'><body style='font:17px ui-monospace,monospace;padding:24px'>"
+                                  "<h2>Location saved</h2><p>%s</p><p><a href='/'>Back to Desk Pal</a></p>") % (q.get("place") or "%.4f, %.4f" % (lat, lon))
     if path == "/wifi":
+        loc = home.current()
         return 200, "application/json", json.dumps({
+            "location": (loc.get("place") or "phone location") if loc else "",
             "connected": wlan.config("ssid") if wlan.isconnected() else "",
             "home": secrets.WIFI_SSID, "saved": [n["ssid"] for n in saved_networks()]})
     if path == "/wifi/add" and q.get("ssid"):
@@ -248,6 +276,7 @@ def boot_tapped():
 
 screen = "limits"
 timer_second = None
+next_wifi_try = 0
 web = webserver.Server()
 footer = fetch()
 clock_ok = sync_clock()
@@ -329,6 +358,12 @@ while True:
             leave_takeover()
         else:
             show(SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)])
+    if not wlan.isconnected() and time.ticks_diff(time.ticks_ms(), next_wifi_try) >= 0:
+        # Offline (left home, router restart...): try the known networks every 30 s, then put the
+        # current screen back since connect() draws "joining wi-fi".
+        next_wifi_try = time.ticks_add(time.ticks_ms(), 30000)
+        if connect():
+            redraw()
     if time.ticks_diff(time.ticks_ms(), next_fetch) >= 0:
         footer = fetch()
         if not clock_ok:

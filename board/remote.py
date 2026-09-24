@@ -29,6 +29,8 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <h2>MUSIC</h2><div class=row><button onclick="go('/music?do=previous')">&#9198;</button>
 <button onclick="go('/music?do=toggle')">&#9199;</button><button onclick="go('/music?do=next')">&#9197;</button></div>
 <div style="margin-top:8px"><a class=btn href="/spotify-login">Connect Spotify</a></div>
+<h2>LOCATION</h2><div id=loc style="margin-bottom:8px;opacity:.8">...</div>
+<button onclick="open('https://desk-voice.vercel.app/api/locate?board='+location.host,'_self')" style="width:100%%">Use my phone's location</button>
 <h2>WI-FI</h2><div id=wifi style="margin-bottom:8px;opacity:.8">...</div>
 <div class=row><input id=ssid placeholder="network name (e.g. hotspot)" autocapitalize=off autocorrect=off></div>
 <div class=row style="margin-top:8px"><input id=pw type=password placeholder="password">
@@ -44,6 +46,7 @@ for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':
 st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen)}catch(e){st.textContent='board not reachable'}}
 async function wifi(){try{const w=await(await fetch('/wifi')).json();const box=document.getElementById('wifi');
 box.textContent='Connected to '+(w.connected||'?')+'. Known: '+w.home;
+document.getElementById('loc').textContent=w.location?'Using: '+w.location+' (set for '+w.connected+')':'Using: your internet connection (approximate)';
 for(const n of w.saved){box.append(', '+n+' ');const a=document.createElement('a');a.href='#';a.textContent='remove';
 a.onclick=e=>{e.preventDefault();delWifi(n)};box.append(a)}}catch(e){}}
 async function addWifi(){const s=ssid.value.trim();if(!s)return;

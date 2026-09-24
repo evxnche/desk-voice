@@ -3,7 +3,7 @@
 # glides along its track at its ground speed; fetches run in a background thread.
 import math, requests, time, _thread, json
 from array import array
-import dashboard, secrets, font5
+import dashboard, secrets, font5, home
 
 URL = secrets.VOICE_URL.replace("/api/voice", "/api/flights") + "?k=" + secrets.VOICE_KEY
 VIEW_FILE = "radar.json"
@@ -54,7 +54,7 @@ _footer = ""
 def _worker():
     global _incoming, _busy
     try:
-        r = requests.get(URL + params(), timeout=15)
+        r = requests.get(URL + params() + home.query(), timeout=15)
         if r.status_code == 200:
             _incoming = (r.json(), "")
         else:

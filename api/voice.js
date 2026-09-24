@@ -327,7 +327,9 @@ export async function POST(request) {
 
   const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
   const centre = centreFrom(url, request.headers);
-  const ipHome = centreFrom(new URL('http://x/'), request.headers);
+  const homeUrl = new URL('http://x/');
+  for (const k of ['home_lat', 'home_lon', 'home_place']) if (url.searchParams.has(k)) homeUrl.searchParams.set(k, url.searchParams.get(k));
+  const ipHome = centreFrom(homeUrl, request.headers); // phone location saved on the board, else IP
   const view = {
     lat: centre.lat, lon: centre.lon, place: centre.place,
     radius: clampRadius(url.searchParams.get('r')),

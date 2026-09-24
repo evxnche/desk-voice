@@ -14,6 +14,9 @@
     },
     "api/spotify-callback.js": {
       "maxDuration": 15
+    },
+    "api/locate.js": {
+      "maxDuration": 15
     }
   }
 }

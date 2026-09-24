@@ -8,7 +8,10 @@ export async function GET(request) {
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) {
     return new Response('unauthorized', { status: 401 });
   }
-  const { lat, lon, place } = centreFrom(new URL('http://x/'), request.headers); // always home, never the radar's place
+  // Home only (never the radar's place): the phone location the board saved, else IP geolocation.
+  const home = new URL('http://x/');
+  for (const k of ['home_lat', 'home_lon', 'home_place']) if (url.searchParams.has(k)) home.searchParams.set(k, url.searchParams.get(k));
+  const { lat, lon, place } = centreFrom(home, request.headers);
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
     return new Response('no location', { status: 400 });
   }
