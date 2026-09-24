@@ -33,7 +33,11 @@ def _scan(known):
         except Exception:
             pass
         try:
-            found = {n[0].decode(): n[3] for n in wlan.scan()}
+            found = {}
+            for n in wlan.scan():
+                name = n[0].decode()
+                if name and n[3] > found.get(name.lower(), ("", -999))[1]:
+                    found[name.lower()] = (name, n[3])
         except Exception:
             found = {}
         if found or attempt:
@@ -42,7 +46,9 @@ def _scan(known):
         time.sleep_ms(500)
         wlan.active(True)
         time.sleep_ms(500)
-    return sorted((s for s in known if s in found), key=lambda s: (s != secrets.WIFI_SSID, -found[s]))
+    # Names match case-insensitively ("eatPizza" saved, "eatPIZZA" broadcast); join with the broadcast spelling.
+    hits = [(found[s.lower()][0], known[s], s == secrets.WIFI_SSID, found[s.lower()][1]) for s in known if s.lower() in found]
+    return [(name, pw) for name, pw, is_home, rssi in sorted(hits, key=lambda h: (not h[2], -h[3]))]
 
 def connect():
     """Join home Wi-Fi if it's in range, else the strongest saved network (the hotspot on the move)."""
@@ -51,9 +57,9 @@ def connect():
     known = {secrets.WIFI_SSID: secrets.WIFI_PASSWORD}
     for n in saved_networks():
         known[n["ssid"]] = n["password"]
-    for ssid in _scan(known) or [secrets.WIFI_SSID]:
+    for ssid, password in _scan(known) or [(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)]:
         dashboard.message("Joining Wi-Fi", ssid)
-        wlan.connect(ssid, known[ssid])
+        wlan.connect(ssid, password)
         for _ in range(24):
             if wlan.isconnected():
                 return True
