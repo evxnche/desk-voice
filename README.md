@@ -7,4 +7,6 @@ Firmware + backend for a Waveshare ESP32-S3-RLCD-4.2 desk gadget (MicroPython v1
 
 `board/rlcd.py` is adapted from micheleaiello/ESP32-S3-4.2inch-RLCD-Driver (GPL-3.0); `show()` was rewritten in viper (~36 ms/frame).
 
-Upload: `python3 -m mpremote cp board/*.py : + cp secrets.py :secrets.py + reset`
+Fonts: `board/font_*.bin` are 1-bit bitmaps of MS Gothic (small), Departure Mono (text) and ABC Areal Mono Bold (headings), made by `python3 tools/make_fonts.py` from the TTFs in ~/Library/Fonts; `board/bitfont.py` draws them.
+
+Upload: `python3 -m mpremote cp board/*.py board/*.bin : + cp secrets.py :secrets.py + reset`

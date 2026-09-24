@@ -2,7 +2,7 @@ import time
 from machine import Pin, SPI
 import framebuf
 import micropython
-import font5
+import font5, bitfont
 
 class RLCD:
     def __init__(self, spi, cs, dc, rst, width=400, height=300):
@@ -35,23 +35,14 @@ class RLCD:
     def line(self, x1, y1, x2, y2, c): self.canvas.line(x1, y1, x2, y2, c)
     def rect(self, x, y, w, h, c): self.canvas.rect(x, y, w, h, c)
     def fill_rect(self, x, y, w, h, c): self.canvas.fill_rect(x, y, w, h, c)
-    def text(self, msg, x, y, c=1): self.canvas.text(msg.lower() if font5.lowercase else msg, x, y, c)
+    def text(self, msg, x, y, c=1): bitfont.get("font_body").text(self.canvas, msg.lower() if font5.lowercase else msg, x, y, c)
     def clear(self, c=0): self.canvas.fill(c)
 
-    # --- SCALABLE TEXT ---
+    # --- LARGE TEXT: an 8*scale px cell per char, same grid as the old scaled 8x8 font ---
     def text_large(self, msg, x, y, scale=2, c=1):
         if font5.lowercase:
             msg = msg.lower()
-        char_w = 8; char_h = 8
-        tmp_buf = bytearray(char_w * char_h // 8)
-        tmp_fb = framebuf.FrameBuffer(tmp_buf, char_w, char_h, framebuf.MONO_HLSB)
-        for char in msg:
-            tmp_fb.fill(0); tmp_fb.text(char, 0, 0, 1)
-            for py in range(8):
-                for px in range(8):
-                    if tmp_fb.pixel(px, py):
-                        self.canvas.fill_rect(x + (px * scale), y + (py * scale), scale, scale, c)
-            x += (8 * scale)
+        bitfont.get("font_big%d" % scale).text(self.canvas, msg, x, y, c)
 
     # --- RAW BITMAPS (1:1 scale) ---
     def bitmap(self, x, y, w, h, pixel_data):

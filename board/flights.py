@@ -36,8 +36,8 @@ def set_view(radar):
     _next_fetch = time.ticks_ms()
 
 CX, CY, R = 98, 164, 94         # radar centre and radius in pixels
-LIST_X = 202                    # table: 10 rows in the 5x7 font
-ROWS = 10
+LIST_X = 202                    # table: 7 planes, 3 lines each, in the small font
+ROWS = 7
 
 FETCH_MS = 15000
 FRAME_MS = 1000         # a 400 kt jet moves ~0.4 px/s at this scale, so 1 fps looks continuous
@@ -158,9 +158,10 @@ def _draw_static():
         font5.text(c, "%dkm" % km, CX - R + 4, CY + R - 26)
         font5.text(c, "%dkm" % (km // 2), CX - R // 2 + 6, CY + R // 2 - 20)
 
-        # table: two lines per plane
+        # table: three lines per plane
         #   1  EZY93ZW A320    25,450  9 SW ^     (DIR = which way it's flying)
-        #     London > Gran Canaria        (or the operator when there's no route)
+        #      easyJet                            (airline, else the operator)
+        #      London > Gran Canaria              (from > to, when known)
         c.vline(LIST_X - 5, 36, 248, 1)
         x = LIST_X
         font5.text(c, "%-2s %-7s %-7s %6s %2s" % ("#", "FLIGHT", "TYPE", "ALT FT", "KM") + " DIR", x, 37)
@@ -174,16 +175,17 @@ def _draw_static():
                 i + 1, dashboard.ascii(a["flight"])[:7], dashboard.ascii(a["type"])[:7], alt, a["km"], a.get("heading", a["dir"])), x, y)
             if a.get("trend"):
                 _arrow(c, 393, y, a["trend"] == "up")
-            second = "%s > %s" % (a["from"], a["to"]) if a.get("from") else a["who"]
-            font5.text(c, "   " + dashboard.ascii(second)[:29], x, y + 9)
-            y += 23
+            route = "%s > %s" % (a["from"], a["to"]) if a.get("from") else "route unknown"
+            font5.text(c, "   " + dashboard.ascii(a["who"])[:30], x, y + 10)
+            font5.text(c, "   " + dashboard.ascii(route)[:30], x, y + 20)
+            y += 33
         if not last["aircraft"]:
             font5.text(c, "no aircraft nearby", x, 52)
     else:
         d.text_large("loading...", CX - 76, CY - 8, 2)
 
     c.fill_rect(0, 286, 400, 14, 1)
-    c.text(dashboard.ascii(_footer)[:50] if _footer else "BOOT: next screen   KEY: refresh / hold to talk", 4, 289, 0)
+    d.text(dashboard.ascii(_footer)[:50] if _footer else "BOOT: next screen   KEY: refresh / hold to talk", 4, 289, 0)
     _static = bytearray(d.canvas_buffer)
     font5.lowercase = True
 
@@ -201,7 +203,7 @@ def _draw_planes():
             py = CY - int((a["n"] + a["vn"] * dt) * scale)
             if px > LIST_X - 12:               # glided off the radar into the list
                 continue
-            if "who" in a:
+            if "who" in a and i < ROWS:        # numbered = listed in the table
                 numbered.append((i + 1, px, py))
                 _plane(c, px, py, a["track"], 8, True)
             else:
