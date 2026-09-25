@@ -4,8 +4,14 @@
 # 4 MHz (80 MHz / 20, exact) and the rate is 4 MHz / 256 = 15625 Hz, which keeps
 # the I2S clocks on the same exact ratio. Both codecs share BCLK/WS, so the
 # board records and plays one after the other, never at once.
-import math, struct, micropython
+import math, struct, time, micropython
 from machine import I2C, I2S, PWM, Pin
+try:
+    import wake          # built into Desk Pal's own firmware (firmware/); stock MicroPython has no wake word
+except ImportError:
+    wake = None
+
+WAKE_PHRASES = ["yo"]    # any English phrase works; longer ones wake it by accident less often
 
 RATE = 15625
 MCLK_HZ = RATE * 256
@@ -86,12 +92,41 @@ def _es7210_init(gain=10):                        # gain step 10 = 30 dB
 
 mclk = None
 
-def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
+def _mclk():
     global mclk
     if mclk is None:
         mclk = PWM(Pin(MCK), freq=MCLK_HZ, duty_u16=32768)
+
+def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
+    if wake:
+        wake.stop()                               # the listener holds I2S0 while idle
+    _mclk()
     return I2S(0, sck=Pin(SCK), ws=Pin(WS), sd=Pin(sd), mode=mode,
                bits=16, format=fmt, rate=RATE, ibuf=ibuf)
+
+_wake_ready = False
+
+def listen():
+    """Keep the wake-phrase listener running; call often. Anything that plays or records pauses it
+    (via _i2s) and the next call here resumes it."""
+    global _wake_ready, wake
+    if wake is None:
+        return
+    if not _wake_ready:
+        try:
+            wake.init(WAKE_PHRASES)
+        except Exception as e:                    # e.g. no speech model flashed: run without it
+            print("wake phrase off:", e)
+            wake = None
+            return
+        _wake_ready = True
+    _mclk()
+    if wake.start():
+        _es7210_init()                            # needs BCLK, which wake.start() just started
+
+def woke():
+    """(phrase index, probability, background level) once the wake phrase is heard, else None."""
+    return wake.heard() if wake else None
 
 TX_BUF = 16000
 
@@ -149,6 +184,50 @@ def record_while(pin, max_seconds, on_start=None, stop=None):
             n += mic.readinto(mv[n:n + 2048])
     finally:
         mic.deinit()
+    return mv[:n]
+
+@micropython.viper
+def _mean_abs(buf: ptr16, n: int) -> int:
+    total = 0
+    for i in range(n):
+        v = int(buf[i])
+        if v >= 32768:
+            v = 65536 - v
+        total += v
+    return total // n if n else 0
+
+def record_speech(max_seconds, floor, stop=None):
+    """After the wake phrase: the listener's audio from just after the phrase until ~0.8 s of quiet
+    follows speech (speech = louder than 3x the room's `floor`). Returns mono PCM, or None if
+    `stop()` fired or nothing was said within 5 s."""
+    buf = bytearray(RATE * 2 * max_seconds)
+    mv = memoryview(buf)
+    loud = max(3 * floor, 40)
+    n = 0
+    spoke = False
+    quiet = 0                                     # quiet 64 ms frames since the last loud one
+    frame = 2048                                  # bytes: 1024 samples, 64 ms
+    start = time.ticks_ms()
+    try:
+        while n + frame <= len(buf):
+            if stop and stop():
+                return None
+            got = 0
+            while got < frame:                    # read() never blocks; fill one frame
+                got += wake.read(mv[n + got:n + frame])
+                if got < frame:
+                    time.sleep_ms(20)
+            if _mean_abs(mv[n:n + frame], frame // 2) > loud:
+                spoke, quiet = True, 0
+            else:
+                quiet += 1
+            n += frame
+            if spoke and quiet >= 12:
+                break
+            if not spoke and time.ticks_diff(time.ticks_ms(), start) > 5000:
+                return None
+    finally:
+        wake.stop()                               # free core 0 for Wi-Fi while the reply comes back
     return mv[:n]
 
 def tone(freqs=(523, 659, 784), ms=250, amp=9000):

@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime
 from machine import Pin
-import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home
+import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
@@ -310,7 +310,11 @@ while True:
         redraw()
         timer.chime()
 
+    audio.listen()                       # the wake phrase works on every screen
     action = pixel_key() if screen == "pixel" else key_action()
+    heard = audio.woke() if action is None else None
+    if heard:
+        action = "hold"                  # same as holding KEY, but it records until you stop talking
     if action == "tap" and screen in ("alert", "timer_done"):
         if screen == "alert":
             alerts.clear()
@@ -333,7 +337,7 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         try:
-            result = voice.ask(key, boot, connect)
+            result = voice.ask(key, boot, connect, heard)
             cmds = result.get("board", []) if isinstance(result, dict) else []
             if isinstance(result, dict) and result.get("radar"):
                 cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look

@@ -1,4 +1,5 @@
-# Hold-to-talk assistant: record while KEY is held, send to desk-voice, show + speak the reply.
+# Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
+# send to desk-voice, show + speak the reply.
 import json, time, requests, _thread
 import audio, dashboard, secrets, flights, music, home
 
@@ -68,12 +69,17 @@ def _request(pcm, box):
         box["error"] = str(e)
     box["done"] = True
 
-def ask(key, boot, connect):
-    """One question: record while `key` is held, then show and speak the reply.
+def ask(key, boot, connect, heard=None):
+    """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
+    is given, then show and speak the reply.
     Returns "back" as soon as `boot` is pressed at any stage, else {"radar": moved?, "board": [commands]}."""
     back = lambda: not boot.value()
-    pcm = audio.record_while(key, MAX_SECONDS, stop=back,
-                             on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
+    if heard:
+        screen("Listening...", hint="Stop talking to send   BOOT: back")
+        pcm = audio.record_speech(MAX_SECONDS, heard[2], stop=back)
+    else:
+        pcm = audio.record_while(key, MAX_SECONDS, stop=back,
+                                 on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
     if pcm is None or back():
         return "back"
     if len(pcm) < audio.RATE * 2 // 2:               # under half a second: treat as a slip
