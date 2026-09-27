@@ -75,8 +75,8 @@ def _request(pcm, box, wake):
 def ask(key, boot, connect, run, tick, heard=None):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
     is given, then show and speak the reply. If the reply comes with board commands (a screen for
-    the weather, flights or music, a timer...) they `run` first and the reply is spoken over that
-    screen, with `tick()` keeping it up to date.
+    the weather, flights or music, a timer...) they `run` first, `tick(False)` draws the screen,
+    and the reply is spoken over it with `tick(True)` keeping it up to date.
     Returns "back" as soon as `boot` is pressed at any stage, else {"board": [commands run]}."""
     back = lambda: not boot.value()
     if heard:
@@ -118,9 +118,11 @@ def ask(key, boot, connect, run, tick, heard=None):
         cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
     for cmd in cmds:
         run(cmd)
-    if not cmds:
+    if cmds:
+        tick(False)
+    else:
         screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
     if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back,
-                      between=tick if cmds else None):
+                      between=(lambda: tick(True)) if cmds else None):
         return "back"
     return {"board": cmds}

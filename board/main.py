@@ -286,10 +286,13 @@ screen = "limits"
 timer_second = None
 def tick_screen(speaking=False):
     """Keep the current screen up to date; call often. While `speaking` (an answer playing over the
-    screen) the today screen skips its weather fetch, which would hold up the audio."""
+    screen) only the radar keeps going (~80 ms a frame): the other screens take 0.3-1 s to redraw,
+    long enough to break up the voice, so they catch up once it's done."""
     global shown_minute, timer_second
+    if speaking and screen != "flights":
+        return
     if screen == "room":
-        if not speaking and room.weather_due() and connect():
+        if room.weather_due() and connect():
             room.fetch_weather()
             shown_minute = None
         lt = room.local_time()
@@ -367,7 +370,7 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         try:
-            result = voice.ask(key, boot, connect, run, lambda: tick_screen(True), heard)
+            result = voice.ask(key, boot, connect, run, tick_screen, heard)
             if isinstance(result, dict) and result["board"]:
                 result = "handled"               # already on the screen that went with the answer
             elif result != "back":

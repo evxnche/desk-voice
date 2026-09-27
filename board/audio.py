@@ -132,24 +132,23 @@ TX_BUF = 16000
 
 def play(buf, volume=0xD0, mono=False, stop=None, between=None):
     """Play 16-bit PCM. `stop()` is polled between chunks; returns False if it cut playback short.
-    `between()` (keeping a screen up to date) runs whenever ~0.35 s of audio is queued, so the
-    speaker never starves; a blocking write would also hold up other threads (screen fetches)."""
+    `between()` (keeping a screen up to date) runs after each 4 KB chunk, followed by a short
+    sleep so other threads (screen fetches) run too: a write that waits for room in the output
+    buffer holds them up. The buffer holds 0.5 s of mono, so between() may take up to ~0.3 s."""
     out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
     _es8311_init(volume)
     pa(1)
     finished = True
-    per_s = RATE * (2 if mono else 4)             # bytes per second
-    t0 = time.ticks_ms()
     try:
         mv = memoryview(buf)
         for i in range(0, len(buf), 4096):
             if stop and stop():
                 finished = False
                 break
-            while between and i * 1000 // per_s - time.ticks_diff(time.ticks_ms(), t0) > 350:
-                between()
-                time.sleep_ms(10)
             out.write(mv[i:i + 4096])
+            if between:
+                between()
+                time.sleep_ms(50)
         if finished:
             # write() returns once data is queued, not played: push a full buffer of
             # silence so the queued audio drains before the amp switches off.
