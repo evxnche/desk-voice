@@ -1,6 +1,9 @@
-import network, time, json, requests, ntptime
+import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio
+
+# The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
+esp32.Partition.mark_app_valid_cancel_rollback()
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
