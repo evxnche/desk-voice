@@ -289,6 +289,7 @@ clock_ok = sync_clock()
 show_limits(footer)
 next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
+next_heard = None                        # wake phrase heard while an answer was still showing
 
 while True:
     web.poll(handle)
@@ -312,7 +313,8 @@ while True:
 
     audio.listen()                       # the wake phrase works on every screen
     action = pixel_key() if screen == "pixel" else key_action()
-    heard = audio.woke() if action is None else None
+    heard = next_heard or (audio.woke() if action is None else None)
+    next_heard = None
     if heard:
         action = "hold"                  # same as holding KEY, but it records until you stop talking
     if action == "tap" and screen in ("alert", "timer_done"):
@@ -348,6 +350,10 @@ while True:
             elif result != "back":
                 end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
                 while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
+                    audio.listen()                             # a follow-up "agent, ..." works here too
+                    next_heard = audio.woke()
+                    if next_heard:
+                        break
                     time.sleep_ms(50)
         except Exception as e:
             dashboard.message("Voice failed", str(e))

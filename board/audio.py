@@ -199,7 +199,7 @@ def _mean_abs(buf: ptr16, n: int) -> int:
 def record_speech(max_seconds, heard, stop=None):
     """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
     recognised, which holds the phrase and maybe the whole question ("agent, what's the weather"),
-    until ~0.8 s of quiet follows new speech, or 3 s pass with none. Speech = louder than 3x the
+    until ~0.8 s of quiet follows new speech, or 4 s pass with none. Speech = louder than 3x the
     room's background level. Returns mono PCM, or None if `stop()` fired."""
     floor, preroll = heard[2], heard[3]
     buf = bytearray(RATE * 2 * max_seconds)
@@ -224,7 +224,7 @@ def record_speech(max_seconds, heard, stop=None):
                 else:
                     quiet += 1
             n += frame
-            if quiet >= (12 if spoke else 47):    # 0.8 s after speech, or 3 s of none
+            if quiet >= (12 if spoke else 62):    # 0.8 s after speech, or 4 s of none
                 break
     finally:
         wake.stop()                               # free core 0 for Wi-Fi while the reply comes back
