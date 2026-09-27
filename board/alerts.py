@@ -1,8 +1,9 @@
-# Agent babysitter: alerts pushed by the Mac's Claude Code / Codex hooks over the LAN.
+# Agent babysitter: alerts pushed by the Mac's Claude Code / Codex hooks over the LAN, plus WhatsApp
+# messages from the iPhone (phone.py; kind "message", agent = sender, project = group).
 import time, math, struct
 import dashboard, font5, audio
 
-queue = []            # newest last: {"agent", "project", "kind": "needs"|"done", "message", "at"}
+queue = []            # newest last: {"agent", "project", "kind": "needs"|"done"|"message", "message", "at"}
 
 def add(agent, project, kind, message, at):
     queue.append({"agent": agent or "Agent", "project": project or "", "kind": kind,
@@ -13,8 +14,8 @@ def clear():
     queue.clear()
 
 def chime(kind):
-    """'needs you': urgent two-tone; 'done': soft falling pair."""
-    notes = (988, 740, 988, 740) if kind == "needs" else (880, 660)
+    """'needs you': urgent two-tone; 'done': soft falling pair; 'message': quick rising pair."""
+    notes = {"needs": (988, 740, 988, 740), "message": (1047, 1319)}.get(kind, (880, 660))
     n = audio.RATE // 6
     buf = bytearray(n * 2 * len(notes))
     i = 0
@@ -27,6 +28,8 @@ def chime(kind):
     audio.play(buf, volume=0xC8, mono=True)
 
 def _title(a):
+    if a["kind"] == "message":
+        return a["agent"]
     return "%s needs you" % a["agent"] if a["kind"] == "needs" else "%s is done" % a["agent"]
 
 def draw():
@@ -38,7 +41,7 @@ def draw():
         return
     a = queue[-1]
     c.fill_rect(0, 0, 400, 34, 1)
-    d.text("AGENT", 10, 13, 0)
+    d.text("WHATSAPP" if a["kind"] == "message" else "AGENT", 10, 13, 0)
     d.text(a["at"], 392 - 8 * len(a["at"]), 13, 0)
     title = dashboard.ascii(_title(a))
     scale = 3 if len(title) <= 16 else 2

@@ -96,7 +96,9 @@ def ask(key, boot, connect, run, tick, heard=None):
         time.sleep(3)
         return None
     box = {}
-    _thread.stack_size(32 * 1024)                    # TLS needs more than the default stack
+    # TLS needs more than the default stack. 30 KB, not 32: with Bluetooth on (phone.py) the only free
+    # internal-RAM blocks big enough are ~31 KB, and a task stack can't live in PSRAM.
+    _thread.stack_size(30 * 1024)
     _thread.start_new_thread(_request, (adpcm.encode(pcm), box, audio.WAKE_PHRASES[heard[0]] if heard else ""))
     while "done" not in box:                         # the worker keeps going if we leave; its result is dropped
         if back():

@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
-import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio
+import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -240,7 +240,7 @@ def handle(method, path, q, body):
     if path == "/state":
         return 200, "application/json", json.dumps({
             "screen": screen, "timer": timer.status(), "music": music.status(),
-            "alert": ("%d agent alert(s)" % len(alerts.queue)) if alerts.queue else ""})
+            "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status()})
     if path == "/agent":
         a = json.loads(body or b"{}")
         alerts.add(a.get("agent"), a.get("project"), "needs" if a.get("kind") == "needs" else "done",
@@ -262,6 +262,7 @@ def handle(method, path, q, body):
 
 pending_alert = []    # alert kinds waiting to chime (the HTTP handler must answer fast)
 ALERT_MS = 3000       # agent alerts dismiss themselves after this
+MESSAGE_MS = 8000     # WhatsApp messages stay long enough to read
 alert_until = 0
 
 # The radar's background fetch can hold the interpreter for ~0.5 s during the TLS handshake,
@@ -318,6 +319,10 @@ def tick_screen(speaking=False):
 
 next_wifi_try = 0
 web = webserver.Server()
+try:
+    phone.start()                        # iPhone notifications over Bluetooth
+except Exception as e:
+    print("bluetooth failed:", e)
 footer = fetch()
 clock_ok = sync_clock()
 show_limits(footer)
@@ -327,6 +332,11 @@ next_heard = None                        # wake phrase heard while an answer was
 
 while True:
     web.poll(handle)
+    phone.tick()
+    while phone.inbox:
+        m = phone.inbox.pop(0)
+        alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock())
+        pending_alert.append("message")
     if pending_alert:
         kind = pending_alert.pop(0)
         if screen != "alert":
@@ -335,7 +345,7 @@ while True:
         else:
             alerts.draw()
         alerts.chime(kind)
-        alert_until = time.ticks_add(time.ticks_ms(), ALERT_MS)
+        alert_until = time.ticks_add(time.ticks_ms(), MESSAGE_MS if kind == "message" else ALERT_MS)
     if screen == "alert" and time.ticks_diff(time.ticks_ms(), alert_until) >= 0:
         alerts.clear()                           # gone after a glance; the chime already got your attention
         leave_takeover()
