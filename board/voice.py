@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread
-import audio, dashboard, secrets, flights, music, home
+import adpcm, audio, dashboard, secrets, flights, music, home
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -45,15 +45,16 @@ def screen(title, heard="", reply="", hint="BOOT: back"):
     d.text(hint, 4, 289, 0)
     d.show()
 
-def _request(pcm, box, wake):
-    """Worker thread: POST the recording, fill `box`, set box['done'].
+def _request(data, box, wake):
+    """Worker thread: POST the recording (4-bit ADPCM), fill `box`, set box['done'].
     `wake` names the wake phrase the recording starts with (the server checks it's really there)."""
     try:
-        hdrs = {"Content-Type": "application/octet-stream"}
+        # ADPCM both ways: a quarter of the bytes of 16-bit PCM over this board's flaky Wi-Fi
+        hdrs = {"Content-Type": "application/octet-stream", "X-Audio": "adpcm"}
         if wake:
             hdrs["X-Wake"] = wake
         hdrs.update(music.headers())               # lets "play something chill" reach Spotify
-        r = requests.post(URL + flights.params() + home.query(), data=pcm, timeout=60, headers=hdrs)
+        r = requests.post(URL + flights.params() + home.query(), data=data, timeout=60, headers=hdrs)
         box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
         if size:                                  # big reads: r.content crawls at ~13 KB/s
@@ -96,7 +97,7 @@ def ask(key, boot, connect, run, tick, heard=None):
         return None
     box = {}
     _thread.stack_size(32 * 1024)                    # TLS needs more than the default stack
-    _thread.start_new_thread(_request, (bytes(pcm), box, audio.WAKE_PHRASES[heard[0]] if heard else ""))
+    _thread.start_new_thread(_request, (adpcm.encode(pcm), box, audio.WAKE_PHRASES[heard[0]] if heard else ""))
     while "done" not in box:                         # the worker keeps going if we leave; its result is dropped
         if back():
             return "back"
@@ -122,7 +123,10 @@ def ask(key, boot, connect, run, tick, heard=None):
         tick(False)
     else:
         screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
-    if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back,
+    sound = memoryview(body)[nl + 1:]
+    if meta.get("audio") == "adpcm":
+        sound = adpcm.decode(sound)                  # ~0.1 s for 6 s of speech
+    if not audio.play(sound, volume=0xBF, mono=True, stop=back,
                       between=(lambda: tick(True)) if cmds else None):
         return "back"
     return {"board": cmds}
