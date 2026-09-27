@@ -73,7 +73,7 @@ def _start(action, method="GET", extra=""):
     _busy = True
     job = (API + "&action=" + action + extra, method)
     try:
-        _thread.stack_size(32 * 1024)
+        _thread.stack_size(20 * 1024)     # plenty for TLS; bigger stacks didn't fit beside Bluetooth
         _thread.start_new_thread(_worker, job)
     except OSError:
         _worker(*job)                     # no stack fits with Bluetooth on: fetch here instead
@@ -86,7 +86,8 @@ def control(what):
 
 def enter():
     global _next_poll, _next_frame
-    _next_poll = _next_frame = time.ticks_ms()
+    _next_frame = time.ticks_ms()
+    _next_poll = time.ticks_add(_next_frame, 100)   # draw first, so switching here shows at once
 
 def status():
     if not now or not now.get("title"):

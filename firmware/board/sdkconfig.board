@@ -7,3 +7,6 @@ CONFIG_SR_MN_EN_MULTINET7_QUANT=y
 # Save a core dump to the "coredump" partition on a crash (the console UART isn't on USB).
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
 CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+# Bluetooth (phone.py) keeps its buffers in PSRAM: in internal RAM it left no block big enough for a
+# 30 KB thread stack, so fetches ran on the main loop and froze the screen and buttons for 1-3 s.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y

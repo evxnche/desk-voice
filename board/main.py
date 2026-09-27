@@ -125,6 +125,27 @@ def key_action():
         time.sleep_ms(10)
     return "tap" if time.ticks_diff(time.ticks_ms(), t0) > 30 else None
 
+# A KEY tap made while the loop was busy (drawing, a fetch on this thread) used to be missed
+# entirely: an edge interrupt latches it, and key_action() counts it as a tap.
+key_hit = False
+
+def _on_key(pin):
+    global key_hit
+    key_hit = True
+
+key.irq(trigger=Pin.IRQ_FALLING, handler=_on_key)
+
+def key_press():
+    """key_action(), plus a tap latched while the loop couldn't look."""
+    global key_hit
+    action = key_action()
+    if action is None and key_hit and key.value():
+        action = "tap"
+    if action is not None or key.value():
+        time.sleep_ms(30 if action == "tap" else 0)
+        key_hit = False                  # this press (and its release bounce) is handled
+    return action
+
 def pixel_key():
     """KEY on the pixel screen: jump the instant it goes down; 'hold' after 0.4 s (voice)."""
     global key_down_at
@@ -323,14 +344,13 @@ def tick_screen(speaking=False):
     if speaking and screen != "flights":
         return
     if screen == "room":
-        if room.weather_due() and connect():
-            room.fetch_weather()
-            shown_minute = None
         lt = room.local_time()
-        minute = lt[4] if lt else -1
+        minute = (lt[4] if lt else -1, room.version)   # redraw each minute and when new weather lands
         if minute != shown_minute:
             room.draw()
             shown_minute = minute
+        elif room.weather_due() and connect():   # after drawing, so switching here shows at once
+            room.fetch_weather_soon()
     if screen == "flights":
         flights.tick(connect)
     if screen == "music":
@@ -383,7 +403,11 @@ while True:
         timer.chime()
 
     audio.listen()                       # the wake phrase works on every screen
-    action = pixel_key() if screen == "pixel" else key_action()
+    if screen == "pixel":
+        action = pixel_key()
+        key_hit = False                  # the game reacts to every press itself
+    else:
+        action = key_press()
     heard = next_heard or (audio.woke() if action is None else None)
     next_heard = None
     if heard:
@@ -400,8 +424,7 @@ while True:
     elif action == "tap" and screen == "flights":
         flights.refresh_now()
     elif action == "tap" and screen == "room":
-        room.fetch_weather()
-        shown_minute = None
+        room.fetch_weather_soon()
     elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
@@ -427,7 +450,7 @@ while True:
         while not boot.value():          # BOOT here means "back", not "next screen"
             time.sleep_ms(10)
         time.sleep_ms(30)
-        boot_hit = False
+        boot_hit = key_hit = False
         if result != "handled":
             redraw()
     elif boot_tapped():

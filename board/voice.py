@@ -100,9 +100,9 @@ def ask(key, boot, connect, run, tick, heard=None):
     phone.hush(True)                                 # Bluetooth advertising slows the upload 2-5x
     try:
         try:
-            # TLS needs more than the default stack. 30 KB, not 32: with Bluetooth on (phone.py) the only free
-            # internal-RAM blocks big enough are ~31 KB, and a task stack can't live in PSRAM.
-            _thread.stack_size(30 * 1024)
+            # TLS needs more than the default stack; 20 KB is plenty (tested on the board), and a task
+            # stack must be one block of internal RAM, which Bluetooth (phone.py) shares.
+            _thread.stack_size(20 * 1024)
             _thread.start_new_thread(_request, job)
         except OSError:
             # Once running a while with Bluetooth on, the biggest free block can be ~15 KB ("can't create

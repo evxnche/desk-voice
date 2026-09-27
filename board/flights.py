@@ -73,7 +73,7 @@ def _start_fetch(connect):
         return
     _busy = True
     try:
-        _thread.stack_size(32 * 1024)      # TLS needs more than the default stack
+        _thread.stack_size(20 * 1024)      # plenty for TLS; bigger stacks didn't fit beside Bluetooth
         _thread.start_new_thread(_worker, ())
     except OSError:
         _worker()                          # no stack fits with Bluetooth on: fetch here (~0.5 s pause)
@@ -86,9 +86,10 @@ def _adopt(data):
         a["ve"], a["vn"] = v * math.sin(t), v * math.cos(t)
 
 def enter():
-    """Called when the screen is shown: draw what we have and fetch now."""
+    """Called when the screen is shown: draw what we have, then fetch."""
     global _next_fetch, _next_frame
-    _next_fetch = _next_frame = time.ticks_ms()
+    _next_frame = time.ticks_ms()
+    _next_fetch = time.ticks_add(_next_frame, 100)  # draw first, so switching here shows at once
 
 def refresh_now():
     global _next_fetch

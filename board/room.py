@@ -1,5 +1,5 @@
 # Today screen: UK local time (from NTP) + outside weather (desk-voice /api/weather -> Open-Meteo).
-import time, requests
+import time, requests, _thread
 import dashboard, battery, font5, secrets, home
 
 WEATHER_URL = secrets.VOICE_URL.replace("/api/voice", "/api/weather") + "?k=" + secrets.VOICE_KEY
@@ -10,6 +10,7 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 
 weather = None
 _weather_at = None
+version = 0                                     # bumped when new weather arrives, so the screen redraws
 
 def weather_due():
     return _weather_at is None or time.ticks_diff(time.ticks_ms(), _weather_at) >= WEATHER_MS
@@ -17,20 +18,32 @@ def weather_due():
 def set_weather(w, is_home=True):
     """Weather the voice assistant just looked up, shown while it speaks. Somewhere else's weather
     is swapped back for home's a minute later."""
-    global weather, _weather_at
+    global weather, _weather_at, version
     weather = w
+    version += 1
     _weather_at = time.ticks_add(time.ticks_ms(), 0 if is_home else 60000 - WEATHER_MS)
 
 def fetch_weather():
-    global weather, _weather_at
+    global weather, _weather_at, version
     _weather_at = time.ticks_ms()               # also paces retries after a failure
     try:
         r = requests.get(WEATHER_URL + home.query(), timeout=15)
         if r.status_code == 200:
             weather = r.json()
+            version += 1
         r.close()
     except Exception:
         pass
+
+def fetch_weather_soon():
+    """fetch_weather() in the background: on this thread it held up the screen and buttons ~1.3 s."""
+    global _weather_at
+    _weather_at = time.ticks_ms()               # not due again while this one runs
+    try:
+        _thread.stack_size(20 * 1024)
+        _thread.start_new_thread(fetch_weather, ())
+    except OSError:
+        fetch_weather()                         # no stack free: fetch here instead
 
 def _uk_offset(t):
     """BST (+1h) from 01:00 UTC on the last Sunday of March to the last Sunday of October."""
