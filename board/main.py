@@ -1,6 +1,6 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
-import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone
+import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -87,20 +87,24 @@ except Exception:
     pass
 
 def fetch():
-    """Update `last` from the relay; return a footer message ('' when fresh)."""
+    """Update `last` straight from Anthropic/OpenAI once signed in on the remote page, else from the
+    relay; return a footer message ('' when fresh)."""
     global last
     if not connect():
         return "no Wi-Fi - showing last known"
     try:
-        r = requests.get(URL, timeout=15)
-        ok = r.status_code == 200
-        if ok:
-            last = r.json()
+        if usage.connected():
+            data = usage.fetch(last)
+        else:
+            r = requests.get(URL, timeout=15)
+            code = r.status_code
+            data = r.json() if code == 200 else None
+            r.close()
+        if data:
+            last = data
             with open("limits.json", "w") as f:
                 json.dump(last, f)
-        code = r.status_code
-        r.close()
-        return "" if ok else "relay error %d" % code
+        return "" if data else "relay error %d" % code
     except Exception as e:
         return "fetch failed: %s" % e
 
@@ -240,7 +244,10 @@ def handle(method, path, q, body):
     if path == "/state":
         return 200, "application/json", json.dumps({
             "screen": screen, "timer": timer.status(), "music": music.status(),
-            "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status()})
+            "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
+            "limits": usage.connected()})
+    if path.startswith("/connect/"):
+        return 200, "application/json", json.dumps(connect_agent(path, q))
     if path == "/agent":
         a = json.loads(body or b"{}")
         alerts.add(a.get("agent"), a.get("project"), "needs" if a.get("kind") == "needs" else "done",
@@ -259,6 +266,26 @@ def handle(method, path, q, body):
         run(routes[path])
         return 200, "application/json", '{"ok":true}'
     return 404, "text/plain", "not found"
+
+def connect_agent(path, q):
+    """Sign-in steps from the remote page's Connect Claude / Connect Codex buttons."""
+    global next_fetch
+    try:
+        if path == "/connect/claude" and q.get("code"):
+            usage.claude_finish(q["code"])
+        elif path == "/connect/claude":
+            return {"url": usage.claude_login_url()}
+        elif path == "/connect/codex":
+            return {"code": usage.codex_start(), "url": usage.CODEX_DEVICE_PAGE}
+        elif path == "/connect/codex/check":
+            if not usage.codex_poll():
+                return {"waiting": True}
+        else:
+            return {"error": "unknown step"}
+    except Exception as e:
+        return {"error": str(e)}
+    next_fetch = time.ticks_ms()          # show the new numbers right away
+    return {"ok": True}
 
 pending_alert = []    # alert kinds waiting to chime (the HTTP handler must answer fast)
 ALERT_MS = 3000       # agent alerts dismiss themselves after this

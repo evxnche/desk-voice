@@ -35,6 +35,9 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div class=row><input id=ssid placeholder="network name (e.g. hotspot)" autocapitalize=off autocorrect=off></div>
 <div class=row style="margin-top:8px"><input id=pw type=password placeholder="password">
 <button onclick="addWifi()">Save</button></div>
+<h2>AGENT LIMITS</h2><div id=lim style="margin-bottom:8px;opacity:.8">...</div>
+<div class=row><button onclick="claude()">Connect Claude</button><button onclick="codex()">Connect Codex</button></div>
+<div id=login style="margin-top:8px"></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
 <script>
 const NAMES={limits:'Limits',room:'Today',pixel:'Pixel Pal',flights:'Flights',music:'Music'};
@@ -43,7 +46,21 @@ for(const n in NAMES){const b=document.createElement('button');b.textContent=NAM
 async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
 async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
-st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen)}catch(e){st.textContent='board not reachable'}}
+st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen);
+lim.textContent=s.limits.length?'Read directly from: '+s.limits.join(', '):'Not signed in: reading the relay'}catch(e){st.textContent='board not reachable'}}
+async function step(p){try{return await(await fetch(p,{method:'POST'})).json()}catch(e){return{error:'board not reachable'}}}
+function done(r,who){login.textContent=r.ok?who+' connected. Limits update in a few seconds.':r.error;refresh()}
+async function claude(){const r=await step('/connect/claude');if(r.error)return done(r);login.textContent='';
+const a=document.createElement('a');a.className='btn';a.href=r.url;a.target='_blank';a.textContent='1. Sign in to Claude';
+const i=document.createElement('input');i.placeholder='2. Paste the code it shows';i.style.marginTop='8px';
+const b=document.createElement('button');b.textContent='3. Save';b.style.cssText='margin-top:8px;width:100%%';
+b.onclick=async()=>done(await step('/connect/claude?code='+encodeURIComponent(i.value.trim())),'Claude');login.append(a,i,b)}
+async function codex(){const r=await step('/connect/codex');if(r.error)return done(r);
+login.textContent='Open '+r.url+' and enter this code:';const c=document.createElement('div');
+c.style.cssText='font-size:28px;letter-spacing:.1em;margin:8px 0';c.textContent=r.code;
+const a=document.createElement('a');a.className='btn';a.href=r.url;a.target='_blank';a.textContent='Open the OpenAI page';
+login.append(c,a);const t=setInterval(async()=>{const s=await step('/connect/codex/check');
+if(!s.waiting){clearInterval(t);done(s,'Codex')}},5000)}
 async function wifi(){try{const w=await(await fetch('/wifi')).json();const box=document.getElementById('wifi');
 box.textContent='Connected to '+(w.connected||'?')+'. Known: '+w.home;
 document.getElementById('loc').textContent=w.location?'Using: '+w.location+' (set for '+w.connected+')':'Using: your internet connection (approximate)';
