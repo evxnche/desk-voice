@@ -45,10 +45,13 @@ def screen(title, heard="", reply="", hint="BOOT: back"):
     d.text(hint, 4, 289, 0)
     d.show()
 
-def _request(pcm, box):
-    """Worker thread: POST the recording, fill `box`, set box['done']."""
+def _request(pcm, box, wake):
+    """Worker thread: POST the recording, fill `box`, set box['done'].
+    `wake` names the wake phrase the recording starts with (the server checks it's really there)."""
     try:
         hdrs = {"Content-Type": "application/octet-stream"}
+        if wake:
+            hdrs["X-Wake"] = wake
         hdrs.update(music.headers())               # lets "play something chill" reach Spotify
         r = requests.post(URL + flights.params() + home.query(), data=pcm, timeout=60, headers=hdrs)
         box["status"] = r.status_code
@@ -76,7 +79,7 @@ def ask(key, boot, connect, heard=None):
     back = lambda: not boot.value()
     if heard:
         screen("Listening...", hint="Stop talking to send   BOOT: back")
-        pcm = audio.record_speech(MAX_SECONDS, heard[2], stop=back)
+        pcm = audio.record_speech(MAX_SECONDS, heard, stop=back)
     else:
         pcm = audio.record_while(key, MAX_SECONDS, stop=back,
                                  on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
@@ -91,7 +94,7 @@ def ask(key, boot, connect, heard=None):
         return None
     box = {}
     _thread.stack_size(32 * 1024)                    # TLS needs more than the default stack
-    _thread.start_new_thread(_request, (bytes(pcm), box))
+    _thread.start_new_thread(_request, (bytes(pcm), box, audio.WAKE_PHRASES[heard[0]] if heard else ""))
     while "done" not in box:                         # the worker keeps going if we leave; its result is dropped
         if back():
             return "back"
@@ -105,6 +108,8 @@ def ask(key, boot, connect, heard=None):
         return None
     nl = body.find(b"\n")
     meta = json.loads(body[:nl])
+    if meta.get("ignored"):                          # a look-alike woke it, or nothing followed the phrase
+        return "back"
     screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
     if meta.get("radar"):
         flights.set_view(meta["radar"])

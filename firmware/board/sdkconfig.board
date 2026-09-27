@@ -2,5 +2,8 @@ CONFIG_ESPTOOLPY_FLASHSIZE_4MB=
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-deskpal.csv"
-# ESP-SR: English MultiNet7 only (the "yo" listener); no WakeNet or Chinese models in the image.
+# ESP-SR: English MultiNet7 only (the wake-phrase listener); no WakeNet or Chinese models in the image.
 CONFIG_SR_MN_EN_MULTINET7_QUANT=y
+# Save a core dump to the "coredump" partition on a crash (the console UART isn't on USB).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y

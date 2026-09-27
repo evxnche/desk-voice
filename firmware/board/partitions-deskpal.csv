@@ -1,7 +1,11 @@
-# Desk Pal, 16 MiB flash. MicroPython adds its "vfs" filesystem after the last partition
-# (0x700000 to the end of flash, 9 MiB). "model" holds ESP-SR's srmodels.bin (MultiNet7 English).
-# Name,   Type, SubType, Offset,   Size,     Flags
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x3F0000,
-model,    data, spiffs,  0x400000, 0x300000,
+# Desk Pal, 16 MiB flash. Two app slots so firmware/ota.sh can update over USB without the BOOT
+# button; "model" holds ESP-SR's srmodels.bin (MultiNet7 English); "coredump" keeps the last crash.
+# MicroPython adds its "vfs" filesystem after the last partition (0x8F0000 to the end, ~7 MiB).
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x6000,
+otadata,  data, ota,      0xf000,   0x2000,
+phy_init, data, phy,      0x11000,  0x1000,
+ota_0,    app,  ota_0,    0x20000,  0x300000,
+ota_1,    app,  ota_1,    0x320000, 0x300000,
+model,    data, spiffs,   0x620000, 0x2C0000,
+coredump, data, coredump, 0x8E0000, 0x10000,

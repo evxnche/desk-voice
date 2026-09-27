@@ -3,11 +3,15 @@
 // given to wake.init() works, no training. Python keeps the codec setup (I2C registers, MCLK PWM,
 // see board/audio.py), stops the listener before it plays or uses machine.I2S, and polls
 // wake.heard(). The raw mic audio also goes into a 16 s ring buffer, so after the wake phrase the
-// question is read straight from it (wake.read) with no gap: "yo, what's the weather" in one breath.
+// question is read straight from it (wake.read) with no gap: "agent, what's the weather" in one breath.
 #include <limits.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 #include "py/runtime.h"
 #include "py/mperrno.h"
+#include "py/mphal.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"  // xTaskCreatePinnedToCore
@@ -25,6 +29,8 @@
 #define PIN_DIN     10
 #define IN_SAMPLES  500     // 32 ms per read; 125 input samples make 128 at 16 kHz
 #define RING        (MIC_RATE * 16)
+#define PREROLL     (MIC_RATE * 3)  // MultiNet reports a phrase ~2.5 s after it starts (at the end of
+                                    // the utterance), so the question may already be in the past
 
 static esp_mn_iface_t *mn_iface;
 static model_iface_data_t *mn;
@@ -40,13 +46,14 @@ static int gain = 8;                // the mic is quiet (~4% of full scale for s
 static int16_t *ring;               // raw mic samples (before gain), PSRAM
 static volatile uint32_t wpos;      // samples written so far (ring index = wpos % RING)
 static uint32_t rpos;               // next sample wake.read() returns
-static volatile uint32_t mark;      // wpos when the phrase was detected
+static volatile uint32_t mark;      // where wake.read() starts: PREROLL before the detection
+static volatile uint32_t preroll;   // samples between mark and the detection
 static volatile int floor_at_mark;  // background level just before the phrase (see noise_floor)
 
-// Mean |sample| of the quietest 1024-sample frame in the 2 s before `end`: the room's background
+// Mean |sample| of the quietest 1024-sample frame in the 5 s before `end`: the room's background
 // level, which Python's end-of-speech detection compares against.
 static int noise_floor(uint32_t end) {
-    uint32_t start = end > 2 * MIC_RATE ? end - 2 * MIC_RATE : 0;
+    uint32_t start = end > 5 * MIC_RATE ? end - 5 * MIC_RATE : 0;
     int best = INT_MAX;
     for (uint32_t s = start; s + 1024 <= end; s += 1024) {
         int sum = 0;
@@ -70,10 +77,12 @@ static void detect(int16_t *buf) {
     if (st == ESP_MN_STATE_DETECTED) {
         esp_mn_results_t *r = mn_iface->get_results(mn);
         if (r->num > 0) {
-            mark = wpos;
-            floor_at_mark = noise_floor(wpos);
+            uint32_t w = wpos;
+            preroll = MIN(w, PREROLL);
+            mark = w - preroll;
+            floor_at_mark = noise_floor(w);
             heard_prob = r->prob[0];
-            heard_id = r->command_id[0];
+            heard_id = r->command_id[0] - 1;
         }
         mn_iface->clean(mn);
     } else if (st == ESP_MN_STATE_TIMEOUT) {
@@ -84,16 +93,21 @@ static void detect(int16_t *buf) {
 static void listen_task(void *arg) {
     // x[0] is the previous block's last sample, so interpolation runs across block edges.
     int16_t *x = heap_caps_malloc((IN_SAMPLES + 1) * sizeof(int16_t), MALLOC_CAP_INTERNAL);
+    int32_t *frames = heap_caps_malloc(IN_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_INTERNAL);
     int16_t *out = heap_caps_malloc(chunk * sizeof(int16_t), MALLOC_CAP_INTERNAL);
     int outn = 0;
     uint32_t t = 0;                 // next output position, in 1/128ths of an input sample from x[0]
     x[0] = 0;
     while (running) {
         size_t got = 0;
-        if (i2s_channel_read(rx, x + 1, IN_SAMPLES * sizeof(int16_t), &got, 100) != ESP_OK || got == 0) {
+        if (i2s_channel_read(rx, frames, IN_SAMPLES * 2 * sizeof(int32_t), &got, 100) != ESP_OK || got == 0) {
             continue;
         }
-        int n = got / sizeof(int16_t);
+        // Stereo 32-bit slots; the ES7210's 16-bit sample is the top half of the left slot (MIC1).
+        int n = got / (2 * sizeof(int32_t));
+        for (int i = 0; i < n; i++) {
+            x[i + 1] = frames[2 * i] >> 16;
+        }
         for (int i = 1; i <= n; i++) {
             ring[(wpos + i - 1) % RING] = x[i];
         }
@@ -125,6 +139,7 @@ static void listen_task(void *arg) {
     i2s_del_channel(rx);
     rx = NULL;
     heap_caps_free(x);
+    heap_caps_free(frames);
     heap_caps_free(out);
     task = NULL;
     vTaskDelete(NULL);
@@ -135,6 +150,33 @@ static void check(esp_err_t err, const char *what) {
         mp_raise_msg_varg(&mp_type_OSError, MP_ERROR_TEXT("%s: %s"), what, esp_err_to_name(err));
     }
 }
+
+static bool debug;
+
+// With wake.debug(True), ESP-IDF/ESP-SR log lines go to the REPL instead of the console UART (not
+// on USB), each given time to reach the Mac before whatever comes next can crash the board.
+static int log_to_repl(const char *fmt, va_list ap) {
+    char buf[200];
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    mp_hal_stdout_tx_strn(buf, MIN(n, (int)sizeof(buf) - 1));
+    vTaskDelay(pdMS_TO_TICKS(30));
+    return n;
+}
+
+static void step(const char *what) {
+    if (debug) {
+        mp_printf(&mp_plat_print, "wake: %s\n", what);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+static mp_obj_t wake_debug(mp_obj_t on) {
+    debug = mp_obj_is_true(on);
+    esp_log_set_vprintf(debug ? log_to_repl : vprintf);
+    esp_log_level_set("*", debug ? ESP_LOG_INFO : ESP_LOG_ERROR);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(wake_debug_obj, wake_debug);
 
 static mp_obj_t wake_stop(void) {
     running = false;
@@ -150,6 +192,7 @@ static MP_DEFINE_CONST_FUN_OBJ_0(wake_stop_obj, wake_stop);
 static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
     wake_stop();
     if (mn == NULL) {
+        step("loading models");
         srmodel_list_t *models = esp_srmodel_init("model");
         if (models == NULL) {
             mp_raise_msg(&mp_type_OSError, MP_ERROR_TEXT("no speech model partition"));
@@ -158,25 +201,31 @@ static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
         if (name == NULL) {
             mp_raise_msg(&mp_type_OSError, MP_ERROR_TEXT("no English MultiNet model"));
         }
+        step(name);
         mn_iface = esp_mn_handle_from_name(name);
+        step("create");
         mn = mn_iface->create(name, n_args > 1 ? mp_obj_get_int(args[1]) : 6000);
         if (mn == NULL) {
             mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("MultiNet create failed"));
         }
         chunk = mn_iface->get_samp_chunksize(mn);
+        step("commands alloc");
         check(esp_mn_commands_alloc(mn_iface, mn), "commands alloc");
         ring = heap_caps_malloc(RING * sizeof(int16_t), MALLOC_CAP_SPIRAM);
         if (ring == NULL) {
             mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("wake ring buffer"));
         }
     }
+    step("commands add");
     esp_mn_commands_clear();
     size_t len;
     mp_obj_t *items;
     mp_obj_get_array(args[0], &len, &items);
     for (size_t i = 0; i < len; i++) {
-        check(esp_mn_commands_add(i, mp_obj_str_get_str(items[i])), "add phrase");
+        // MultiNet's command ids start at 1: it indexes a table by id - 1 (id 0 crashes it).
+        check(esp_mn_commands_add(i + 1, mp_obj_str_get_str(items[i])), "add phrase");
     }
+    step("commands update");
     esp_mn_error_t *err = esp_mn_commands_update();
     mp_obj_t rejected = mp_obj_new_list(0, NULL);
     for (int i = 0; err != NULL && i < err->num; i++) {
@@ -184,6 +233,7 @@ static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
     }
     mn_iface->clean(mn);
     heard_id = -1;
+    step("ready");
     return rejected;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(wake_init_obj, 1, 2, wake_init);
@@ -201,7 +251,8 @@ static mp_obj_t wake_start(size_t n_args, const mp_obj_t *args) {
         gain = mp_obj_get_int(args[0]);
     }
     heard_id = -1;                  // a phrase heard before the last stop() is stale now
-    // Same format as MicroPython's I2S(0, mode=RX, bits=16, format=MONO, rate=15625).
+    // Same bus format MicroPython's I2S(0, mode=RX, bits=16, rate=15625) uses underneath: it always
+    // clocks 32-bit stereo frames for RX and keeps the top 16 bits of the left slot for MONO.
     i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     cc.dma_desc_num = 8;            // ~256 ms of slack if detect() runs long
     cc.dma_frame_num = IN_SAMPLES;
@@ -209,7 +260,7 @@ static mp_obj_t wake_start(size_t n_args, const mp_obj_t *args) {
     check(i2s_new_channel(&cc, NULL, &rx), "i2s channel");
     i2s_std_config_t sc = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = PIN_BCLK,
@@ -240,8 +291,8 @@ static mp_obj_t wake_start(size_t n_args, const mp_obj_t *args) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(wake_start_obj, 0, 1, wake_start);
 
-// wake.heard(): (phrase index, probability, background level) once per detection, else None.
-// Also points wake.read() at the audio right after the phrase.
+// wake.heard(): (phrase index, probability, background level, pre-roll bytes) once per detection,
+// else None. Also points wake.read() at the audio from 3 s before the detection (the pre-roll).
 static mp_obj_t wake_heard(void) {
     int id = heard_id;
     if (id < 0) {
@@ -249,13 +300,14 @@ static mp_obj_t wake_heard(void) {
     }
     heard_id = -1;
     rpos = mark;
-    mp_obj_t t[3] = {mp_obj_new_int(id), mp_obj_new_float(heard_prob), mp_obj_new_int(floor_at_mark)};
-    return mp_obj_new_tuple(3, t);
+    mp_obj_t t[4] = {mp_obj_new_int(id), mp_obj_new_float(heard_prob), mp_obj_new_int(floor_at_mark),
+                     mp_obj_new_int(preroll * sizeof(int16_t))};
+    return mp_obj_new_tuple(4, t);
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(wake_heard_obj, wake_heard);
 
 // wake.read(buf): copy the raw 15625 Hz mono 16-bit audio captured since the last read (starting
-// just after the phrase) into buf; returns the byte count, 0 if nothing new yet. Never blocks.
+// with the pre-roll) into buf; returns the byte count, 0 if nothing new yet. Never blocks.
 static mp_obj_t wake_read(mp_obj_t buf_in) {
     mp_buffer_info_t b;
     mp_get_buffer_raise(buf_in, &b, MP_BUFFER_WRITE);
@@ -298,6 +350,7 @@ static const mp_rom_map_elem_t wake_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_read), MP_ROM_PTR(&wake_read_obj) },
     { MP_ROM_QSTR(MP_QSTR_level), MP_ROM_PTR(&wake_level_obj) },
     { MP_ROM_QSTR(MP_QSTR_info), MP_ROM_PTR(&wake_info_obj) },
+    { MP_ROM_QSTR(MP_QSTR_debug), MP_ROM_PTR(&wake_debug_obj) },
 };
 static MP_DEFINE_CONST_DICT(wake_globals, wake_globals_table);
 

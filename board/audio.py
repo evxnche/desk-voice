@@ -11,7 +11,7 @@ try:
 except ImportError:
     wake = None
 
-WAKE_PHRASES = ["yo"]    # any English phrase works; longer ones wake it by accident less often
+WAKE_PHRASES = ["agent"] # any English phrase works; longer ones wake it by accident less often
 
 RATE = 15625
 MCLK_HZ = RATE * 256
@@ -125,7 +125,7 @@ def listen():
         _es7210_init()                            # needs BCLK, which wake.start() just started
 
 def woke():
-    """(phrase index, probability, background level) once the wake phrase is heard, else None."""
+    """(phrase index, probability, background level, pre-roll bytes) once the wake phrase is heard."""
     return wake.heard() if wake else None
 
 TX_BUF = 16000
@@ -196,10 +196,12 @@ def _mean_abs(buf: ptr16, n: int) -> int:
         total += v
     return total // n if n else 0
 
-def record_speech(max_seconds, floor, stop=None):
-    """After the wake phrase: the listener's audio from just after the phrase until ~0.8 s of quiet
-    follows speech (speech = louder than 3x the room's `floor`). Returns mono PCM, or None if
-    `stop()` fired or nothing was said within 5 s."""
+def record_speech(max_seconds, heard, stop=None):
+    """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
+    recognised, which holds the phrase and maybe the whole question ("agent, what's the weather"),
+    until ~0.8 s of quiet follows new speech, or 3 s pass with none. Speech = louder than 3x the
+    room's background level. Returns mono PCM, or None if `stop()` fired."""
+    floor, preroll = heard[2], heard[3]
     buf = bytearray(RATE * 2 * max_seconds)
     mv = memoryview(buf)
     loud = max(3 * floor, 40)
@@ -207,7 +209,6 @@ def record_speech(max_seconds, floor, stop=None):
     spoke = False
     quiet = 0                                     # quiet 64 ms frames since the last loud one
     frame = 2048                                  # bytes: 1024 samples, 64 ms
-    start = time.ticks_ms()
     try:
         while n + frame <= len(buf):
             if stop and stop():
@@ -217,15 +218,14 @@ def record_speech(max_seconds, floor, stop=None):
                 got += wake.read(mv[n + got:n + frame])
                 if got < frame:
                     time.sleep_ms(20)
-            if _mean_abs(mv[n:n + frame], frame // 2) > loud:
-                spoke, quiet = True, 0
-            else:
-                quiet += 1
+            if n >= preroll:                      # only speech after the phrase decides when to stop
+                if _mean_abs(mv[n:n + frame], frame // 2) > loud:
+                    spoke, quiet = True, 0
+                else:
+                    quiet += 1
             n += frame
-            if spoke and quiet >= 12:
+            if quiet >= (12 if spoke else 47):    # 0.8 s after speech, or 3 s of none
                 break
-            if not spoke and time.ticks_diff(time.ticks_ms(), start) > 5000:
-                return None
     finally:
         wake.stop()                               # free core 0 for Wi-Fi while the reply comes back
     return mv[:n]

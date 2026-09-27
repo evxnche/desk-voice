@@ -280,6 +280,14 @@ function reply(heard, text, pcm = new Int16Array(0), radar = null, board = []) {
   });
 }
 
+// Nothing to say: the board goes back to what it was doing.
+function ignored(heard) {
+  const body = Buffer.from(JSON.stringify({ heard, ignored: true }) + '\n');
+  return new Response(body, {
+    headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
+  });
+}
+
 async function speak(text) {
   const speech = await generateSpeech({
     model: gateway.speechModel('openai/tts-1'),
@@ -314,12 +322,24 @@ export async function POST(request) {
   }
   const pcm = normalize(new Int16Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.length - (body.length % 2))));
 
-  const [{ text: heard }, limits] = await Promise.all([
+  const [{ text: transcript }, limits] = await Promise.all([
     // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
     transcribe({ model: gateway.transcriptionModel('openai/gpt-4o-mini-transcribe'), audio: toWav(pcm, RATE) })
       .catch(() => ({ text: '' })),
     limitsSummary(),
   ]);
+  let heard = transcript;
+  // Wake-phrase recordings (X-Wake: the phrase) start a few seconds before the board recognised
+  // it, so they include the phrase. The board's listener also fires on look-alikes ("urgent",
+  // "a gentle breeze"), so only answer when the transcript really has the phrase, and answer
+  // what comes after it.
+  const wake = (request.headers.get('x-wake') || '').trim().toLowerCase();
+  if (wake) {
+    const at = new RegExp(`\\b${wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
+    console.log('wake:', wake, '| transcript:', heard, '| match:', Boolean(at));
+    if (!at || !heard.slice(at.index + at[0].length).trim()) return ignored(heard);
+    heard = heard.slice(at.index + at[0].length);
+  }
   if (!heard.trim()) {
     const text = "Sorry, I didn't catch that.";
     return reply('', text, await speak(text));
