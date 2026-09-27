@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread
-import adpcm, audio, dashboard, secrets, flights, music, home
+import adpcm, audio, dashboard, secrets, flights, music, home, phone
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -97,19 +97,23 @@ def ask(key, boot, connect, run, tick, heard=None):
         return None
     box = {}
     job = (adpcm.encode(pcm), box, audio.WAKE_PHRASES[heard[0]] if heard else "")
+    phone.hush(True)                                 # Bluetooth advertising slows the upload 2-5x
     try:
-        # TLS needs more than the default stack. 30 KB, not 32: with Bluetooth on (phone.py) the only free
-        # internal-RAM blocks big enough are ~31 KB, and a task stack can't live in PSRAM.
-        _thread.stack_size(30 * 1024)
-        _thread.start_new_thread(_request, job)
-    except OSError:
-        # Once running a while with Bluetooth on, the biggest free block can be ~15 KB ("can't create
-        # thread"): ask from this thread instead. BOOT then only works once the answer is back.
-        _request(*job)
-    while "done" not in box:                         # the worker keeps going if we leave; its result is dropped
-        if back():
-            return "back"
-        time.sleep_ms(20)
+        try:
+            # TLS needs more than the default stack. 30 KB, not 32: with Bluetooth on (phone.py) the only free
+            # internal-RAM blocks big enough are ~31 KB, and a task stack can't live in PSRAM.
+            _thread.stack_size(30 * 1024)
+            _thread.start_new_thread(_request, job)
+        except OSError:
+            # Once running a while with Bluetooth on, the biggest free block can be ~15 KB ("can't create
+            # thread"): ask from this thread instead. BOOT then only works once the answer is back.
+            _request(*job)
+        while "done" not in box:                     # the worker keeps going if we leave; its result is dropped
+            if back():
+                return "back"
+            time.sleep_ms(20)
+    finally:
+        phone.hush(False)
     if "error" in box:
         screen("", reply="Couldn't reach the assistant: %s" % box["error"])
         return None

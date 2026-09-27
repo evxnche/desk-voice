@@ -196,6 +196,17 @@ def start():
     ble.config(gap_name="deskpal", mtu=247)
     _advertise()
 
+def hush(on):
+    """Stop advertising while `on`: it slows Wi-Fi a lot (a 45 KB voice upload took 1.2-4.7 s while
+    advertising, 0.6 s with Bluetooth off, 0.85 s on but quiet), so voice questions hush it until the
+    answer is in. Nothing to do while the iPhone is connected: the board only advertises when it isn't."""
+    if ble is None or conn is not None:
+        return
+    if on:
+        ble.gap_advertise(None)
+    else:
+        _advertise()
+
 def tick():
     """Ask the phone about the next new notification; call often from the main loop."""
     global asking, answer

@@ -99,12 +99,20 @@ def _mclk():
 
 def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
     if wake:
-        wake.stop()                               # the listener holds I2S0 while idle
+        _pause_listener()                         # the listener holds I2S0 while idle
     _mclk()
     return I2S(0, sck=Pin(SCK), ws=Pin(WS), sd=Pin(sd), mode=mode,
                bits=16, format=fmt, rate=RATE, ibuf=ibuf)
 
-_wake_ready = False
+_wake_ready = False                               # wake.init() run since the listener last stopped
+
+def _pause_listener():
+    """Stop the listener; the next listen() re-runs wake.init() (~10 ms), which also resets MultiNet.
+    Restarted as it was, MultiNet was still mid-way through the last question and missed a wake phrase
+    said right after the answer (2 of 3 tries on the board; 0 of 3 with the reset)."""
+    global _wake_ready
+    wake.stop()
+    _wake_ready = False
 
 def listen():
     """Keep the wake-phrase listener running; call often. Anything that plays or records pauses it
@@ -210,7 +218,7 @@ def record_speech(max_seconds, heard, stop=None):
     floor, preroll = heard[2], heard[3]
     buf = bytearray(RATE * 2 * max_seconds)
     mv = memoryview(buf)
-    loud = max(3 * floor, 40)
+    loud = None
     n = 0
     spoke = False
     quiet = 0                                     # quiet 64 ms frames since the last loud one
@@ -225,6 +233,8 @@ def record_speech(max_seconds, heard, stop=None):
                 if got < frame:
                     time.sleep_ms(20)
             if n >= preroll:                      # only speech after the phrase decides when to stop
+                if loud is None:
+                    loud = max(3 * _background(mv, n, frame, floor), 40)
                 if _mean_abs(mv[n:n + frame], frame // 2) > loud:
                     spoke, quiet = True, 0
                 else:
@@ -233,8 +243,16 @@ def record_speech(max_seconds, heard, stop=None):
             if quiet >= (12 if spoke else 62):    # 0.8 s after speech, or 4 s of none
                 break
     finally:
-        wake.stop()                               # free core 0 for Wi-Fi while the reply comes back
+        _pause_listener()                         # free core 0 for Wi-Fi while the reply comes back
     return mv[:n]
+
+def _background(mv, n, frame, floor):
+    """The room's background level: the 10th-percentile frame of the 3 s pre-roll (mv[:n]). The listener's
+    own `floor` (the quietest frame in the 5 s before the phrase) read 1-11 instead of ~35 if it had
+    restarted in that time, e.g. for a follow-up right after an answer: the mic's first frames are near
+    silent. Room noise then counted as speech and it recorded for the full 12 s."""
+    levels = sorted(_mean_abs(mv[i:i + frame], frame // 2) for i in range(0, n - frame + 1, frame))
+    return levels[len(levels) // 10] if levels else floor
 
 def tone(freqs=(523, 659, 784), ms=250, amp=9000):
     n = RATE * ms // 1000
