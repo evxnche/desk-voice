@@ -1,20 +1,23 @@
 // Voice assistant for the ESP32-S3 RLCD desk board.
-// POST raw 16-bit little-endian mono PCM at 15625 Hz, ?k=VOICE_KEY.
+// POST raw 16-bit little-endian mono PCM at 15625 Hz, ?k=VOICE_KEY; with X-Audio: adpcm the body is
+// 4-bit IMA ADPCM (lib/adpcm.js) instead, and so is the reply audio: a quarter of the bytes.
 // Optional radar state from the board: &lat=..&lon=..&place=.. (custom centre) and &r=nm (range).
-// Replies with one JSON line ({heard, reply[, radar]}) + "\n" + raw PCM in the same format.
+// Replies with one JSON line ({heard, reply[, audio: 'adpcm'][, radar]}) + "\n" + audio in the same format.
 // `radar` tells the board to move/zoom its radar screen: {lat, lon, place, r} or {home: true, r}.
 import { generateSpeech, generateText, jsonSchema, stepCountIs, tool, transcribe } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
 import * as spotify from '../lib/spotify.js';
+import { decode as decodeAdpcm, encode as encodeAdpcm } from '../lib/adpcm.js';
 
 const RATE = 15625;
-// Claude models need paid AI Gateway credits; the free tier allows gpt-5-mini.
-// After topping up, switch to 'anthropic/claude-haiku-4.5' (and drop providerOptions).
+// Claude models need paid AI Gateway credits. Of the free-tier models, gpt-oss-120b answered
+// fastest with the same tool use as gpt-5-mini (1.3 s vs 3.3 s on average, 2026-09-27).
+// After topping up, try 'anthropic/claude-haiku-4.5' (and drop providerOptions).
 // CHAT_MODEL in the Vercel env overrides it without a code change.
-const CHAT_MODEL = process.env.CHAT_MODEL || 'openai/gpt-5-mini';
-const MAX_BYTES = RATE * 2 * 15; // 15 s of audio
+const CHAT_MODEL = process.env.CHAT_MODEL || 'openai/gpt-oss-120b';
+const MAX_SECONDS = 15;
 
 function toWav(samples, rate) {
   const data = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
@@ -276,9 +279,10 @@ function boardTools(cmds, spotifyRefresh) {
   };
 }
 
-function reply(heard, text, pcm = new Int16Array(0), radar = null, board = []) {
-  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(radar && { radar }), ...(board.length && { board }) }) + '\n');
-  const body = Buffer.concat([head, Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)]);
+function reply(heard, text, pcm, adpcm, radar = null, board = []) {
+  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(adpcm && { audio: 'adpcm' }), ...(radar && { radar }), ...(board.length && { board }) }) + '\n');
+  const audio = adpcm ? encodeAdpcm(pcm) : Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const body = Buffer.concat([head, audio]);
   // An explicit length avoids chunked encoding, which MicroPython decodes at ~13 KB/s.
   return new Response(body, {
     headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
@@ -335,10 +339,13 @@ export async function POST(request) {
   const t0 = Date.now();
   const body = Buffer.from(await request.arrayBuffer());
   const ms = { upload: Date.now() - t0 };
-  if (body.length < RATE || body.length > MAX_BYTES) {
+  const adpcm = request.headers.get('x-audio') === 'adpcm';
+  const samples = adpcm ? decodeAdpcm(body)
+    : new Int16Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.length - (body.length % 2)));
+  if (samples.length < RATE / 2 || samples.length > RATE * MAX_SECONDS) {
     return new Response('audio must be 0.5-15 s', { status: 400 });
   }
-  const pcm = normalize(new Int16Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.length - (body.length % 2))));
+  const pcm = normalize(samples);
 
   const [{ text: transcript }, limits] = await Promise.all([
     // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
@@ -364,7 +371,7 @@ export async function POST(request) {
   }
   if (!heard.trim()) {
     const text = "Sorry, I didn't catch that.";
-    return reply('', text, await speak(text));
+    return reply('', text, await speak(text), adpcm);
   }
 
   const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
@@ -460,5 +467,5 @@ export async function POST(request) {
   const audio = await speak(text);
   ms.speak = Date.now() - tSpeak;
   console.log('ms:', JSON.stringify({ ...ms, total: Date.now() - t0 }), '| model:', CHAT_MODEL);
-  return reply(heard, text, audio, radar, cmds);
+  return reply(heard, text, audio, adpcm, radar, cmds);
 }
