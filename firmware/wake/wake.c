@@ -1,8 +1,8 @@
 // `wake`: always-on phrase spotting for Desk Pal. A FreeRTOS task on core 0 reads the ES7210 mic
 // on I2S0, resamples 15625 -> 16000 Hz and runs ESP-SR MultiNet7 (English) over it; any phrase
 // given to wake.init() works, no training. Python keeps the codec setup (I2C registers, MCLK PWM,
-// see board/audio.py), stops the listener before it plays or uses machine.I2S, and polls
-// wake.heard(). The raw mic audio also goes into a 16 s ring buffer, so after the wake phrase the
+// see board/audio.py), stops the listener before it uses machine.I2S, and polls wake.heard().
+// Answers play through the listener's own bus (wake.speaker/say), so the phrase is heard over them. The raw mic audio also goes into a 16 s ring buffer, so after the wake phrase the
 // question is read straight from it (wake.read) with no gap: "gee gee, what's the weather" in one breath.
 #include <limits.h>
 #include <stdarg.h>
@@ -27,6 +27,7 @@
 #define PIN_BCLK    9
 #define PIN_WS      45
 #define PIN_DIN     10
+#define PIN_DOUT    8       // ES8311 speaker DAC
 #define IN_SAMPLES  500     // 32 ms per read; 125 input samples make 128 at 16 kHz
 #define RING        (MIC_RATE * 16)
 #define PREROLL     (MIC_RATE * 3)  // MultiNet reports a phrase ~2.5 s after it starts (at the end of
@@ -35,7 +36,12 @@
 static esp_mn_iface_t *mn_iface;
 static model_iface_data_t *mn;
 static int chunk;                   // samples per detect() call (16 kHz)
-static i2s_chan_handle_t rx;
+static i2s_chan_handle_t rx, tx;       // tx only while the speaker is on (wake.speaker)
+static volatile int want_speaker = -1; // wake.speaker() asks the task to switch the bus: 1 on, 0 off
+static volatile esp_err_t switched;    // how that went
+static const int16_t *say_buf;         // wake.say(): 15625 Hz mono PCM being played
+static volatile uint32_t say_len, say_pos;
+MP_REGISTER_ROOT_POINTER(mp_obj_t wake_playing);   // keeps say_buf's object alive
 static TaskHandle_t task;
 static volatile bool running;
 static volatile int heard_id = -1;
@@ -90,18 +96,110 @@ static void detect(int16_t *buf) {
     }
 }
 
+static void close_bus(void) {
+    if (tx != NULL) {
+        i2s_channel_disable(tx);
+        i2s_del_channel(tx);
+        tx = NULL;
+    }
+    if (rx != NULL) {
+        i2s_channel_disable(rx);
+        i2s_del_channel(rx);
+        rx = NULL;
+    }
+}
+
+// Open I2S0 for the mic, plus the speaker if `speaker`: full duplex on one set of clocks, so the mic
+// keeps listening while an answer plays. The speaker channel only exists while playing: its DMA
+// buffers are internal RAM, which Bluetooth leaves little of.
+static esp_err_t open_bus(bool speaker) {
+    // Same bus format MicroPython's I2S(0, mode=RX, bits=16, rate=15625) uses underneath: it always
+    // clocks 32-bit stereo frames for RX and keeps the top 16 bits of the left slot for MONO.
+    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    cc.dma_desc_num = speaker ? 4 : 8;  // mic only: ~256 ms of slack if detect() runs long; with the
+                                        // speaker 128 ms each way, so the same 32 KB of DMA buffers
+    cc.dma_frame_num = IN_SAMPLES;
+    cc.auto_clear = true;               // the speaker plays silence once say() runs out
+    esp_err_t err = i2s_new_channel(&cc, speaker ? &tx : NULL, &rx);
+    if (err != ESP_OK) {
+        return err;
+    }
+    i2s_std_config_t sc = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = PIN_BCLK,
+            .ws = PIN_WS,
+            .dout = speaker ? PIN_DOUT : I2S_GPIO_UNUSED,
+            .din = PIN_DIN,
+        },
+    };
+    sc.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
+    if (tx != NULL) {
+        err = i2s_channel_init_std_mode(tx, &sc);
+    }
+    if (err == ESP_OK) {
+        err = i2s_channel_init_std_mode(rx, &sc);
+    }
+    if (err == ESP_OK && tx != NULL) {
+        err = i2s_channel_enable(tx);
+    }
+    if (err == ESP_OK) {
+        err = i2s_channel_enable(rx);
+    }
+    if (err != ESP_OK) {
+        close_bus();
+    }
+    return err;
+}
+
+// Top the speaker's DMA buffers up from say_buf: 32-bit stereo slots like the mic, the 16-bit sample
+// in the top half of both. Never blocks; called after every mic read, which paces it.
+static void feed_speaker(int32_t *txf) {
+    while (say_pos < say_len) {
+        uint32_t pos = say_pos, k = MIN(say_len - pos, IN_SAMPLES);
+        const int16_t *src = say_buf + pos;
+        for (uint32_t i = 0; i < k; i++) {
+            txf[2 * i] = txf[2 * i + 1] = (int32_t)((uint32_t)(uint16_t)src[i] << 16);
+        }
+        size_t wrote = 0;
+        i2s_channel_write(tx, txf, k * 2 * sizeof(int32_t), &wrote, 0);
+        say_pos = pos + wrote / (2 * sizeof(int32_t));
+        if (wrote < k * 2 * sizeof(int32_t)) {
+            break;                      // full; more after the next read
+        }
+    }
+}
+
 static void listen_task(void *arg) {
     // x[0] is the previous block's last sample, so interpolation runs across block edges.
     int16_t *x = heap_caps_malloc((IN_SAMPLES + 1) * sizeof(int16_t), MALLOC_CAP_INTERNAL);
     int32_t *frames = heap_caps_malloc(IN_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_INTERNAL);
     int16_t *out = heap_caps_malloc(chunk * sizeof(int16_t), MALLOC_CAP_INTERNAL);
+    int32_t *txf = heap_caps_malloc(IN_SAMPLES * 2 * sizeof(int32_t), MALLOC_CAP_SPIRAM);
     int outn = 0;
     uint32_t t = 0;                 // next output position, in 1/128ths of an input sample from x[0]
     x[0] = 0;
     while (running) {
+        if (want_speaker >= 0) {
+            close_bus();
+            switched = open_bus(want_speaker && txf != NULL);
+            if (switched != ESP_OK && want_speaker) {
+                open_bus(false);    // no room for the speaker channel: keep listening without it
+            }
+            want_speaker = -1;
+        }
+        if (rx == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
         size_t got = 0;
         if (i2s_channel_read(rx, frames, IN_SAMPLES * 2 * sizeof(int32_t), &got, 100) != ESP_OK || got == 0) {
             continue;
+        }
+        if (tx != NULL) {
+            feed_speaker(txf);
         }
         // Stereo 32-bit slots; the ES7210's 16-bit sample is the top half of the left slot (MIC1).
         int n = got / (2 * sizeof(int32_t));
@@ -135,12 +233,12 @@ static void listen_task(void *arg) {
         t -= n << 7;
         x[0] = x[n];
     }
-    i2s_channel_disable(rx);
-    i2s_del_channel(rx);
-    rx = NULL;
+    close_bus();
+    say_len = 0;
     heap_caps_free(x);
     heap_caps_free(frames);
     heap_caps_free(out);
+    heap_caps_free(txf);
     task = NULL;
     vTaskDelete(NULL);
 }
@@ -251,45 +349,74 @@ static mp_obj_t wake_start(size_t n_args, const mp_obj_t *args) {
         gain = mp_obj_get_int(args[0]);
     }
     heard_id = -1;                  // a phrase heard before the last stop() is stale now
-    // Same bus format MicroPython's I2S(0, mode=RX, bits=16, rate=15625) uses underneath: it always
-    // clocks 32-bit stereo frames for RX and keeps the top 16 bits of the left slot for MONO.
-    i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    cc.dma_desc_num = 8;            // ~256 ms of slack if detect() runs long
-    cc.dma_frame_num = IN_SAMPLES;
-    cc.auto_clear = true;
-    check(i2s_new_channel(&cc, NULL, &rx), "i2s channel");
-    i2s_std_config_t sc = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(MIC_RATE),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_32BIT, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = PIN_BCLK,
-            .ws = PIN_WS,
-            .dout = I2S_GPIO_UNUSED,
-            .din = PIN_DIN,
-        },
-    };
-    sc.slot_cfg.slot_mask = I2S_STD_SLOT_BOTH;
-    esp_err_t err = i2s_channel_init_std_mode(rx, &sc);
-    if (err == ESP_OK) {
-        err = i2s_channel_enable(rx);
-    }
-    if (err != ESP_OK) {
-        i2s_del_channel(rx);
-        rx = NULL;
-        check(err, "i2s start");
-    }
+    want_speaker = -1;
+    check(open_bus(false), "i2s start");
     running = true;
     if (xTaskCreatePinnedToCore(listen_task, "wake", 12 * 1024, NULL, 5, &task, 0) != pdPASS) {
         running = false;
-        i2s_channel_disable(rx);
-        i2s_del_channel(rx);
-        rx = NULL;
+        close_bus();
         mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("wake task"));
     }
     return mp_const_true;
 }
 static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(wake_start_obj, 0, 1, wake_start);
+
+// wake.speaker(on): switch the running listener's bus to mic + speaker (full duplex) or back to mic
+// only, with no gap in listening beyond the switch itself (~40 ms). The caller then re-initialises
+// the codecs. Raises OSError if the speaker channel won't open; the listener carries on without it.
+static mp_obj_t wake_speaker(mp_obj_t on_in) {
+    if (task == NULL) {
+        mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("not listening"));
+    }
+    int on = mp_obj_is_true(on_in);
+    say_len = 0;
+    if (on == (tx != NULL)) {
+        return mp_const_none;
+    }
+    want_speaker = on;
+    for (int i = 0; want_speaker >= 0 && i < 100; i++) {   // the task switches after its next read
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (want_speaker >= 0) {
+        mp_raise_msg(&mp_type_OSError, MP_ERROR_TEXT("speaker switch timed out"));
+    }
+    if (!on) {
+        MP_STATE_VM(wake_playing) = MP_OBJ_NULL;             // the task is done with it
+    } else if (tx == NULL) {
+        check(switched != ESP_OK ? switched : ESP_ERR_NO_MEM, "speaker");
+    }
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(wake_speaker_obj, wake_speaker);
+
+// wake.say(buf): play 15625 Hz 16-bit mono PCM through the speaker (after wake.speaker(True)).
+// Returns at once; wake.left() counts down. Leave buf unchanged until then.
+static mp_obj_t wake_say(mp_obj_t buf_in) {
+    mp_buffer_info_t b;
+    mp_get_buffer_raise(buf_in, &b, MP_BUFFER_READ);
+    say_len = 0;
+    MP_STATE_VM(wake_playing) = buf_in;
+    say_buf = b.buf;
+    say_pos = 0;
+    say_len = b.len / sizeof(int16_t);
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(wake_say_obj, wake_say);
+
+// wake.left(): samples of the last say() not yet handed to the speaker. At 0 about 128 ms more is
+// still queued in the DMA buffers.
+static mp_obj_t wake_left(void) {
+    uint32_t pos = say_pos, len = say_len;
+    return mp_obj_new_int(tx != NULL && pos < len ? len - pos : 0);
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(wake_left_obj, wake_left);
+
+// wake.hush(): drop what's left of the last say().
+static mp_obj_t wake_hush(void) {
+    say_len = 0;
+    return mp_const_none;
+}
+static MP_DEFINE_CONST_FUN_OBJ_0(wake_hush_obj, wake_hush);
 
 // wake.heard(): (phrase index, probability, background level, pre-roll bytes) once per detection,
 // else None. Also points wake.read() at the audio from 3 s before the detection (the pre-roll).
@@ -351,6 +478,10 @@ static const mp_rom_map_elem_t wake_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_level), MP_ROM_PTR(&wake_level_obj) },
     { MP_ROM_QSTR(MP_QSTR_info), MP_ROM_PTR(&wake_info_obj) },
     { MP_ROM_QSTR(MP_QSTR_debug), MP_ROM_PTR(&wake_debug_obj) },
+    { MP_ROM_QSTR(MP_QSTR_speaker), MP_ROM_PTR(&wake_speaker_obj) },
+    { MP_ROM_QSTR(MP_QSTR_say), MP_ROM_PTR(&wake_say_obj) },
+    { MP_ROM_QSTR(MP_QSTR_left), MP_ROM_PTR(&wake_left_obj) },
+    { MP_ROM_QSTR(MP_QSTR_hush), MP_ROM_PTR(&wake_hush_obj) },
 };
 static MP_DEFINE_CONST_DICT(wake_globals, wake_globals_table);
 
