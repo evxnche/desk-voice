@@ -9,8 +9,8 @@ TOKENS = "oauth.json"
 # leaked board token can't run models.
 CLAUDE_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 CLAUDE_AUTHORIZE = "https://claude.ai/oauth/authorize"
-CLAUDE_REDIRECT = "https://console.anthropic.com/oauth/code/callback"   # shows a code to paste back
-CLAUDE_TOKEN = "https://console.anthropic.com/v1/oauth/token"
+CLAUDE_REDIRECT = "https://platform.claude.com/oauth/code/callback"   # shows a code to paste back
+CLAUDE_TOKEN = "https://platform.claude.com/v1/oauth/token"
 CLAUDE_USAGE = "https://api.anthropic.com/api/oauth/usage"
 
 # Codex CLI's public OAuth client and its device-code sign-in (the "enter this code" kind).
@@ -76,7 +76,7 @@ _claude_pending = None      # (verifier, state) between "Connect Claude" and pas
 def claude_login_url():
     global _claude_pending
     verifier = _b64url(os.urandom(32))
-    state = _b64url(os.urandom(16))
+    state = _b64url(os.urandom(32))
     _claude_pending = (verifier, state)
     challenge = _b64url(hashlib.sha256(verifier.encode()).digest())
     return (CLAUDE_AUTHORIZE + "?code=true&client_id=" + CLAUDE_ID + "&response_type=code&redirect_uri=" +
