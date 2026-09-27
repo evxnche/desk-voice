@@ -187,6 +187,8 @@ def run(cmd):
     elif do == "music":
         music.control(cmd.get("what") or "toggle")
         show("music")
+    elif do == "weather":                  # what the voice assistant just looked up
+        room.set_weather(cmd["data"], cmd.get("home", True))
     elif do == "alerts_clear":
         alerts.clear()
         if screen == "alert":
@@ -282,6 +284,32 @@ def boot_tapped():
 
 screen = "limits"
 timer_second = None
+def tick_screen(speaking=False):
+    """Keep the current screen up to date; call often. While `speaking` (an answer playing over the
+    screen) the today screen skips its weather fetch, which would hold up the audio."""
+    global shown_minute, timer_second
+    if screen == "room":
+        if not speaking and room.weather_due() and connect():
+            room.fetch_weather()
+            shown_minute = None
+        lt = room.local_time()
+        minute = lt[4] if lt else -1
+        if minute != shown_minute:
+            room.draw()
+            shown_minute = minute
+    if screen == "flights":
+        flights.tick(connect)
+    if screen == "music":
+        music.tick(connect)
+    if screen == "timer":
+        sec = timer.remaining() // 1000
+        if sec != timer_second:
+            timer.draw()
+            timer_second = sec
+    if screen == "pixel":
+        critter.scene.step()
+        critter.scene.draw()
+
 next_wifi_try = 0
 web = webserver.Server()
 footer = fetch()
@@ -339,14 +367,9 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         try:
-            result = voice.ask(key, boot, connect, heard)
-            cmds = result.get("board", []) if isinstance(result, dict) else []
-            if isinstance(result, dict) and result.get("radar"):
-                cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
-            if cmds:
-                for cmd in cmds:
-                    run(cmd)
-                result = "handled"
+            result = voice.ask(key, boot, connect, run, lambda: tick_screen(True), heard)
+            if isinstance(result, dict) and result["board"]:
+                result = "handled"               # already on the screen that went with the answer
             elif result != "back":
                 end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
                 while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
@@ -387,26 +410,6 @@ while True:
         if screen == "limits":
             show_limits(footer)
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
-    if screen == "room":
-        if room.weather_due() and connect():
-            room.fetch_weather()
-            shown_minute = None
-        lt = room.local_time()
-        minute = lt[4] if lt else -1
-        if minute != shown_minute:
-            room.draw()
-            shown_minute = minute
-    if screen == "flights":
-        flights.tick(connect)
-    if screen == "music":
-        music.tick(connect)
-    if screen == "timer":
-        sec = timer.remaining() // 1000
-        if sec != timer_second:
-            timer.draw()
-            timer_second = sec
-    if screen == "pixel":
-        critter.scene.step()
-        critter.scene.draw()
-    else:
+    tick_screen()
+    if screen != "pixel":
         time.sleep_ms(50)

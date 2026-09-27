@@ -130,18 +130,25 @@ def woke():
 
 TX_BUF = 16000
 
-def play(buf, volume=0xD0, mono=False, stop=None):
-    """Play 16-bit PCM. `stop()` is polled between chunks; returns False if it cut playback short."""
+def play(buf, volume=0xD0, mono=False, stop=None, between=None):
+    """Play 16-bit PCM. `stop()` is polled between chunks; returns False if it cut playback short.
+    `between()` (keeping a screen up to date) runs whenever ~0.35 s of audio is queued, so the
+    speaker never starves; a blocking write would also hold up other threads (screen fetches)."""
     out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
     _es8311_init(volume)
     pa(1)
     finished = True
+    per_s = RATE * (2 if mono else 4)             # bytes per second
+    t0 = time.ticks_ms()
     try:
         mv = memoryview(buf)
         for i in range(0, len(buf), 4096):
             if stop and stop():
                 finished = False
                 break
+            while between and i * 1000 // per_s - time.ticks_diff(time.ticks_ms(), t0) > 350:
+                between()
+                time.sleep_ms(10)
             out.write(mv[i:i + 4096])
         if finished:
             # write() returns once data is queued, not played: push a full buffer of

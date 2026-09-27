@@ -14,6 +14,13 @@ _weather_at = None
 def weather_due():
     return _weather_at is None or time.ticks_diff(time.ticks_ms(), _weather_at) >= WEATHER_MS
 
+def set_weather(w, is_home=True):
+    """Weather the voice assistant just looked up, shown while it speaks. Somewhere else's weather
+    is swapped back for home's a minute later."""
+    global weather, _weather_at
+    weather = w
+    _weather_at = time.ticks_add(time.ticks_ms(), 0 if is_home else 60000 - WEATHER_MS)
+
 def fetch_weather():
     global weather, _weather_at
     _weather_at = time.ticks_ms()               # also paces retries after a failure

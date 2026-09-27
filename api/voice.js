@@ -12,7 +12,8 @@ import * as spotify from '../lib/spotify.js';
 const RATE = 15625;
 // Claude models need paid AI Gateway credits; the free tier allows gpt-5-mini.
 // After topping up, switch to 'anthropic/claude-haiku-4.5' (and drop providerOptions).
-const CHAT_MODEL = 'openai/gpt-5-mini';
+// CHAT_MODEL in the Vercel env overrides it without a code change.
+const CHAT_MODEL = process.env.CHAT_MODEL || 'openai/gpt-5-mini';
 const MAX_BYTES = RATE * 2 * 15; // 15 s of audio
 
 function toWav(samples, rate) {
@@ -148,7 +149,11 @@ function radarTools(view, changes, heard) {
       execute: async ({ place }) => {
         const where = place ? await geocode(place) : { ...view.home, name: view.home.place };
         if (!where) return { ok: false, error: `couldn't find "${place}"` };
-        return { place: where.name || 'home', ...(await getWeather(where.lat, where.lon)) };
+        const data = { place: where.name || 'home', ...(await getWeather(where.lat, where.lon)) };
+        // The board's today screen shows it during the answer, named as asked (geocoded names can be
+        // in scripts its font lacks, like 東京都).
+        changes.weather = { data: { ...data, place: place || data.place }, home: !place };
+        return data;
       },
     }),
     set_radar: tool({
@@ -239,10 +244,10 @@ function boardTools(cmds, spotifyRefresh) {
         additionalProperties: false,
       }),
       execute: async ({ query, kind }) => {
+        cmds.push({ do: 'screen', name: 'music' });
         if (!spotifyRefresh) return { ok: false, error: 'Spotify is not connected to the gadget yet' };
         try {
           const r = await spotify.playSearch(spotifyRefresh, query, kind || 'playlist');
-          cmds.push({ do: 'screen', name: 'music' });
           return { ok: true, ...r };
         } catch (e) {
           return { ok: false, error: e.message };
@@ -258,10 +263,10 @@ function boardTools(cmds, spotifyRefresh) {
         additionalProperties: false,
       }),
       execute: async ({ action }) => {
+        cmds.push({ do: 'screen', name: 'music' });
         if (!spotifyRefresh) return { ok: false, error: 'Spotify is not connected to the gadget yet' };
         try {
           const now = await spotify.control(spotifyRefresh, action);
-          cmds.push({ do: 'screen', name: 'music' });
           return { ok: true, now_playing: now.title ? `${now.title} by ${now.artist}` : 'nothing' };
         } catch (e) {
           return { ok: false, error: e.message };
@@ -312,14 +317,24 @@ function needsSearch(question) {
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
 const GADGETY = /\b(timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to)\b/i;
 
-const RADARY = /\b(radar|radius|range|zoom(ed)?|track(ing)?|(flights?|planes?|aircraft) (near|around|over|in|at|within))\b/i;
+const RADARY = /\b(radar|radius|range|zoom(ed)?|track(ing)?|(flights?|planes?|aircrafts?) (near|around|over|in|at|within))\b/i;
+
+// "Show me flights over Heathrow", "zoom the radar out": set_radar has to run first, or the model
+// sometimes says "now showing flights over Heathrow" without moving the radar.
+const MOVE_RADAR = /\b(radar|zoom(ed)?|(flights?|planes?|aircrafts?) (near|around|over|above|in|at))\b/i;
+
+// Answers about these open the matching screen, which stays up while the answer is spoken.
+const FLIGHTY = /\b(flights?|planes?|aircrafts?|airplanes?|jets?|radar)\b/i;
+const WEATHERY = /\b(weather|temperature|forecast|rain(ing|y)?|sunny|snow(ing|y)?|windy|umbrella)\b/i;
 
 export async function POST(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) {
     return new Response('unauthorized', { status: 401 });
   }
+  const t0 = Date.now();
   const body = Buffer.from(await request.arrayBuffer());
+  const ms = { upload: Date.now() - t0 };
   if (body.length < RATE || body.length > MAX_BYTES) {
     return new Response('audio must be 0.5-15 s', { status: 400 });
   }
@@ -333,6 +348,7 @@ export async function POST(request) {
       .catch(() => ({ text: '' })),
     limitsSummary(),
   ]);
+  ms.transcribe = Date.now() - t0 - ms.upload;
   let heard = transcript;
   // Wake-phrase recordings (X-Wake: the phrase) start a few seconds before the board recognised
   // it, so they include the phrase. The board's listener also fires on look-alikes ("urgent" for
@@ -365,6 +381,7 @@ export async function POST(request) {
   const cmds = [];
   const spotifyRefresh = request.headers.get('x-spotify-refresh') || '';
   let text;
+  const tChat = Date.now();
   try {
     const result = await generateText({
       model: CHAT_MODEL,
@@ -398,7 +415,9 @@ export async function POST(request) {
       // Radar requests get the same treatment: without it the model sometimes claims "zoomed to 100 km"
       // without calling set_radar.
       prepareStep: ({ stepNumber }) =>
-        stepNumber === 0 && (needsSearch(heard) || RADARY.test(heard) || GADGETY.test(heard)) ? { toolChoice: 'required' } : {},
+        stepNumber !== 0 ? {}
+          : MOVE_RADAR.test(heard) ? { toolChoice: { type: 'tool', toolName: 'set_radar' } }
+          : needsSearch(heard) || RADARY.test(heard) || GADGETY.test(heard) ? { toolChoice: 'required' } : {},
       stopWhen: stepCountIs(4),
       maxOutputTokens: 400,
     });
@@ -414,6 +433,14 @@ export async function POST(request) {
       view.radius = clampRadius(spoken);
       changes.set = true;
     }
+    // The board switches to the screen that goes with the answer before speaking it: the radar
+    // for flights (a set_radar move already does that), "today" for weather, music for Spotify.
+    const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));
+    if (!changes.set && !cmds.length) {
+      if (used.includes('get_nearby_flights') || FLIGHTY.test(heard)) cmds.push({ do: 'screen', name: 'flights' });
+      else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
+    }
+    if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
     console.log('heard:', heard, '| tools:', JSON.stringify(result.steps.flatMap((st) => st.toolCalls.map((c) => [c.toolName, c.input]))));
   } catch (e) {
     // The free tier allows ~5 model calls a minute, and a tool-using answer takes 2-3 of them.
@@ -423,10 +450,15 @@ export async function POST(request) {
       : 'Sorry, something went wrong answering that.';
     console.error(e);
   }
+  ms.chat = Date.now() - tChat;
   // A zoom alone keeps whatever centre the board had: automatic (home) or a named place.
   const atHome = changes.home ?? !centre.custom;
   const radar = !changes.set ? null
     : atHome ? { home: true, r: view.radius }
     : { lat: view.lat, lon: view.lon, place: view.place, r: view.radius };
-  return reply(heard, text, await speak(text), radar, cmds);
+  const tSpeak = Date.now();
+  const audio = await speak(text);
+  ms.speak = Date.now() - tSpeak;
+  console.log('ms:', JSON.stringify({ ...ms, total: Date.now() - t0 }), '| model:', CHAT_MODEL);
+  return reply(heard, text, audio, radar, cmds);
 }

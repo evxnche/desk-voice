@@ -72,10 +72,12 @@ def _request(pcm, box, wake):
         box["error"] = str(e)
     box["done"] = True
 
-def ask(key, boot, connect, heard=None):
+def ask(key, boot, connect, run, tick, heard=None):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
-    is given, then show and speak the reply.
-    Returns "back" as soon as `boot` is pressed at any stage, else {"radar": moved?, "board": [commands]}."""
+    is given, then show and speak the reply. If the reply comes with board commands (a screen for
+    the weather, flights or music, a timer...) they `run` first and the reply is spoken over that
+    screen, with `tick()` keeping it up to date.
+    Returns "back" as soon as `boot` is pressed at any stage, else {"board": [commands run]}."""
     back = lambda: not boot.value()
     if heard:
         screen("Listening...", hint="Stop talking to send   BOOT: back")
@@ -110,9 +112,15 @@ def ask(key, boot, connect, heard=None):
     meta = json.loads(body[:nl])
     if meta.get("ignored"):                          # a look-alike woke it, or nothing followed the phrase
         return "back"
-    screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
+    cmds = meta.get("board") or []
     if meta.get("radar"):
         flights.set_view(meta["radar"])
-    if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back):
+        cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
+    for cmd in cmds:
+        run(cmd)
+    if not cmds:
+        screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
+    if not audio.play(memoryview(body)[nl + 1:], volume=0xBF, mono=True, stop=back,
+                      between=tick if cmds else None):
         return "back"
-    return {"radar": bool(meta.get("radar")), "board": meta.get("board") or []}
+    return {"board": cmds}
