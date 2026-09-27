@@ -3,7 +3,7 @@
 // given to wake.init() works, no training. Python keeps the codec setup (I2C registers, MCLK PWM,
 // see board/audio.py), stops the listener before it plays or uses machine.I2S, and polls
 // wake.heard(). The raw mic audio also goes into a 16 s ring buffer, so after the wake phrase the
-// question is read straight from it (wake.read) with no gap: "agent, what's the weather" in one breath.
+// question is read straight from it (wake.read) with no gap: "easy, what's the weather" in one breath.
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>

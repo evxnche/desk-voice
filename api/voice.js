@@ -280,6 +280,9 @@ function reply(heard, text, pcm = new Int16Array(0), radar = null, board = []) {
   });
 }
 
+// How the transcriber may write a wake phrase, when it's not always spelled as said.
+const WAKE_SPELLINGS = { easy: 'easy|eazy|e\\.?[ -]?z' };   // "Easy", "EZ", "E.Z.", "E-Z"
+
 // Nothing to say: the board goes back to what it was doing.
 function ignored(heard) {
   const body = Buffer.from(JSON.stringify({ heard, ignored: true }) + '\n');
@@ -324,18 +327,21 @@ export async function POST(request) {
 
   const [{ text: transcript }, limits] = await Promise.all([
     // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
-    transcribe({ model: gateway.transcriptionModel('openai/gpt-4o-mini-transcribe'), audio: toWav(pcm, RATE) })
+    // English only: left to guess, it heard "show me aircraft over Bournemouth" as Czech.
+    transcribe({ model: gateway.transcriptionModel('openai/gpt-4o-mini-transcribe'), audio: toWav(pcm, RATE),
+                 providerOptions: { openai: { language: 'en' } } })
       .catch(() => ({ text: '' })),
     limitsSummary(),
   ]);
   let heard = transcript;
   // Wake-phrase recordings (X-Wake: the phrase) start a few seconds before the board recognised
-  // it, so they include the phrase. The board's listener also fires on look-alikes ("urgent",
-  // "a gentle breeze"), so only answer when the transcript really has the phrase, and answer
-  // what comes after it.
+  // it, so they include the phrase. The board's listener also fires on look-alikes ("urgent" for
+  // "agent"), so only answer when the transcript really has the phrase, and answer what comes
+  // after it.
   const wake = (request.headers.get('x-wake') || '').trim().toLowerCase();
   if (wake) {
-    const at = new RegExp(`\\b${wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
+    const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const at = new RegExp(`\\b(?:${words})(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
     console.log('wake:', wake, '| transcript:', heard, '| match:', Boolean(at));
     if (!at || !heard.slice(at.index + at[0].length).trim()) return ignored(heard);
     heard = heard.slice(at.index + at[0].length);

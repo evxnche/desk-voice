@@ -350,7 +350,7 @@ while True:
             elif result != "back":
                 end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
                 while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
-                    audio.listen()                             # a follow-up "agent, ..." works here too
+                    audio.listen()                             # a follow-up "easy, ..." works here too
                     next_heard = audio.woke()
                     if next_heard:
                         break
