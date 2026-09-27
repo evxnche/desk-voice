@@ -134,7 +134,8 @@ def _irq(event, data):
         if service:                       # no ANCS: not an iPhone, or notification sharing is off
             ble.gattc_discover_characteristics(conn, service[0], service[1])
     elif event == _CHAR_RESULT:
-        chars[data[4]] = (data[2], data[1])
+        # The module reuses one UUID object for every event: copy it before keeping it.
+        chars[bluetooth.UUID(data[4])] = (data[2], data[1])
     elif event == _CHAR_DONE:
         ble.gattc_discover_descriptors(conn, service[0], service[1])
     elif event == _DESC_RESULT:
