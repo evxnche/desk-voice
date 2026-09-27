@@ -290,7 +290,7 @@ function reply(heard, text, pcm, adpcm, radar = null, board = []) {
 }
 
 // How the transcriber may write a wake phrase, when it's not always spelled as said.
-const WAKE_SPELLINGS = { easy: 'easy|eazy|e\\.?[ -]?z' };   // "Easy", "EZ", "E.Z.", "E-Z"
+const WAKE_SPELLINGS = { 'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g' };   // "Gigi", "gee gee", "GG", "G.G.", "G-G"
 
 // Nothing to say: the board goes back to what it was doing.
 function ignored(heard) {

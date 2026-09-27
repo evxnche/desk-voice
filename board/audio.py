@@ -11,7 +11,7 @@ try:
 except ImportError:
     wake = None
 
-WAKE_PHRASES = ["easy"]  # "EZ"; any English phrase works; longer ones wake it by accident less often
+WAKE_PHRASES = ["gee gee"]  # "gg"; any English phrase works; longer ones wake it by accident less often
 
 RATE = 15625
 MCLK_HZ = RATE * 256
@@ -204,7 +204,7 @@ def _mean_abs(buf: ptr16, n: int) -> int:
 
 def record_speech(max_seconds, heard, stop=None):
     """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
-    recognised, which holds the phrase and maybe the whole question ("easy, what's the weather"),
+    recognised, which holds the phrase and maybe the whole question ("gee gee, what's the weather"),
     until ~0.8 s of quiet follows new speech, or 4 s pass with none. Speech = louder than 3x the
     room's background level. Returns mono PCM, or None if `stop()` fired."""
     floor, preroll = heard[2], heard[3]
