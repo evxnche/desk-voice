@@ -300,14 +300,21 @@ function ignored(heard) {
   });
 }
 
+// Grok's voice is ready ~0.5 s sooner than tts-1 for short answers (0.5-1.1 s vs 1.1-1.8 s, 2026-09-27).
+// TTS_MODEL=openai/tts-1 in the Vercel env brings back the old voice.
+const TTS_MODEL = process.env.TTS_MODEL || 'spacexai/grok-tts';
+
 async function speak(text) {
+  const openai = TTS_MODEL.startsWith('openai/');
   const speech = await generateSpeech({
-    model: gateway.speechModel('openai/tts-1'),
+    model: gateway.speechModel(TTS_MODEL),
     text,
-    voice: 'alloy',
-    outputFormat: 'wav',
+    // Grok is slower asked for WAV; its raw PCM is 24 kHz 16-bit mono.
+    ...(openai ? { voice: 'alloy', outputFormat: 'wav' } : { outputFormat: 'pcm' }),
   });
-  const { rate, samples } = parseWav(Buffer.from(speech.audio.uint8Array));
+  const audio = Buffer.from(speech.audio.uint8Array);
+  const { rate, samples } = openai ? parseWav(audio)
+    : { rate: 24000, samples: new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.length - (audio.length % 2))) };
   return resample(samples, rate, RATE);
 }
 
@@ -395,7 +402,7 @@ export async function POST(request) {
       providerOptions: { openai: { reasoningEffort: 'minimal' } },
       system:
         'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
-        'Your reply is spoken aloud and shown on a tiny screen, so answer in one to three short sentences of plain speech: ' +
+        'Your reply is spoken aloud and shown on a tiny screen, so answer in one or two short sentences of plain speech: ' +
         'no markdown, lists, emoji or URLs. This is a one-shot voice gadget: never ask the owner a follow-up or ' +
         'clarifying question, just give your best answer. Never say you are unaware of an event without searching first. ' +
         'Use get_weather for any weather question. Use metric units: km, km/h and Celsius (plane altitudes stay in feet). ' +
