@@ -72,8 +72,11 @@ def _start_fetch(connect):
         _incoming = (None, "no Wi-Fi")
         return
     _busy = True
-    _thread.stack_size(32 * 1024)          # TLS needs more than the default stack
-    _thread.start_new_thread(_worker, ())
+    try:
+        _thread.stack_size(32 * 1024)      # TLS needs more than the default stack
+        _thread.start_new_thread(_worker, ())
+    except OSError:
+        _worker()                          # no stack fits with Bluetooth on: fetch here (~0.5 s pause)
 
 def _adopt(data):
     for a in data["aircraft"]:

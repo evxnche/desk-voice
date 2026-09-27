@@ -71,8 +71,12 @@ def _start(action, method="GET", extra=""):
     if _busy or not refresh:
         return
     _busy = True
-    _thread.stack_size(32 * 1024)
-    _thread.start_new_thread(_worker, (API + "&action=" + action + extra, method))
+    job = (API + "&action=" + action + extra, method)
+    try:
+        _thread.stack_size(32 * 1024)
+        _thread.start_new_thread(_worker, job)
+    except OSError:
+        _worker(*job)                     # no stack fits with Bluetooth on: fetch here instead
 
 def control(what):
     """play / pause / toggle / next / previous. The reply is fresh now-playing state."""

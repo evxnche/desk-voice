@@ -453,6 +453,9 @@ while True:
         if screen == "limits":
             show_limits(footer)
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
-    tick_screen()
+    try:
+        tick_screen()
+    except Exception as e:               # one screen's error mustn't stop the whole app
+        print("screen error:", e)
     if screen != "pixel":
         time.sleep_ms(50)
