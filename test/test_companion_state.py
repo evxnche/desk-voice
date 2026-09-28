@@ -1,5 +1,7 @@
 """Host-side checks for small pieces of companion state."""
+import ast
 import importlib
+import json
 import errno
 import os
 import sys
@@ -153,6 +155,53 @@ class CompanionStateTests(unittest.TestCase):
         self.assertEqual(["Codex"], [item["key"][1] for item in c.queue if item["kind"] == "needs"])
         self.assertTrue(any(item["kind"] == "message" for item in a.queue))
         self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:02"))
+
+    def test_repeated_done_still_resolves_new_needs_without_repeating_done_display(self):
+        with open(os.path.join(BOARD, "main.py")) as handle:
+            source = ast.parse(handle.read())
+        handler = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "handle")
+        env = {"alerts": self.alerts, "companion": self.companion, "pending_alert": [],
+               "secrets": types.SimpleNamespace(VOICE_KEY="test"), "json": json,
+               "local_clock": lambda: "10:00", "_focused": lambda: False,
+               "active_alert": None, "screen": "pal", "leave_takeover": lambda: None}
+        exec(compile(ast.Module(body=[handler], type_ignores=[]), "main.py", "exec"), env)
+        def post(kind):
+            return env["handle"]("POST", "/agent", {"k": "test"}, json.dumps({
+                "agent": "Claude", "project": "Desk", "kind": kind,
+                "message": "Approve" if kind == "needs" else "Finished"}).encode())
+
+        post("needs")
+        post("done")
+        post("needs")
+        self.assertIsNotNone(self.alerts.latest_needs())
+        self.assertEqual(1, len([item for item in self.alerts.queue if item["kind"] == "done"]))
+        post("done")  # duplicate done display inside DEDUP_MS must still resolve the new request
+        self.assertIsNone(self.alerts.latest_needs())
+        self.assertFalse(any(item["kind"] == "needs" for item in self.companion.queue))
+        self.assertFalse(any(record["alert"]["kind"] == "needs" for record in env["pending_alert"]))
+        self.assertEqual(1, len([item for item in self.alerts.queue if item["kind"] == "done"]))
+
+    def test_done_dismisses_only_matching_visible_needs_alert(self):
+        with open(os.path.join(BOARD, "main.py")) as handle:
+            source = ast.parse(handle.read())
+        handler = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "handle")
+        dismissed = []
+        env = {"alerts": self.alerts, "companion": self.companion, "pending_alert": [],
+               "secrets": types.SimpleNamespace(VOICE_KEY="test"), "json": json,
+               "local_clock": lambda: "10:00", "_focused": lambda: False,
+               "active_alert": None, "screen": "alert", "leave_takeover": lambda: dismissed.append(True)}
+        exec(compile(ast.Module(body=[handler], type_ignores=[]), "main.py", "exec"), env)
+        self.alerts.add("Claude", "Desk", "needs", "Approve", "10:00")
+        env["active_alert"] = self.alerts.latest_needs()
+        done = b'{"agent":"Claude","project":"Desk","kind":"done","message":"Finished"}'
+        env["handle"]("POST", "/agent", {"k": "test"}, done)
+        self.assertIsNone(env["active_alert"])
+        self.assertEqual([True], dismissed)
+        self.alerts.add("Friend", "Chat", "message", "Hello", "10:00")
+        env["active_alert"] = self.alerts.queue[-1].copy()
+        env["handle"]("POST", "/agent", {"k": "test"}, done)
+        self.assertEqual("message", env["active_alert"]["kind"])
+        self.assertEqual([True], dismissed)
 
     def test_focus_defers_routine_pending_alerts_without_blocking_needs(self):
         pending = []

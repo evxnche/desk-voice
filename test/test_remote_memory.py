@@ -138,7 +138,7 @@ class RemoteMemoryTests(unittest.TestCase):
         companion = types.SimpleNamespace(resolve_needs=lambda agent, project: events.append(("speech", agent, project)))
         env = {"alerts": alerts, "companion": companion, "pending_alert": [],
                "secrets": self.modules["secrets"], "json": json, "local_clock": lambda: "10:01",
-               "_focused": lambda: False}
+               "_focused": lambda: False, "active_alert": None, "screen": "pal"}
         exec(compile(ast.Module(body=functions, type_ignores=[]), "main.py", "exec"), env)
         result = env["handle"]("POST", "/agent", {"k": "test"},
                                b'{"agent":"Claude","project":"Desk","kind":"done","message":"Finished"}')

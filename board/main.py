@@ -280,6 +280,7 @@ def local_clock():
 
 def handle(method, path, q, body):
     """LAN requests: the remote page, the Mac's agent hooks and the Spotify sign-in hand-off."""
+    global active_alert
     # The remote page and its buttons are open to anyone on the home Wi-Fi. Mac agent alerts use the
     # shared key; Spotify token hand-offs use a token-specific signature so the key stays private.
     if path == "/agent" and q.get("k") != secrets.VOICE_KEY:
@@ -338,10 +339,17 @@ def handle(method, path, q, body):
     if path == "/agent":
         a = json.loads(body or b"{}")
         kind = "needs" if a.get("kind") == "needs" else "done"
-        if alerts.add(a.get("agent"), a.get("project"), kind, a.get("message"), local_clock()):
-            if kind == "done":
-                alerts.resolve(a.get("agent"), a.get("project"), pending_alert)
-                companion.resolve_needs(a.get("agent"), a.get("project"))
+        accepted = alerts.add(a.get("agent"), a.get("project"), kind, a.get("message"), local_clock())
+        if kind == "done":
+            alerts.resolve(a.get("agent"), a.get("project"), pending_alert)
+            companion.resolve_needs(a.get("agent"), a.get("project"))
+            if active_alert and active_alert["kind"] == "needs" and \
+                    active_alert["agent"] == (a.get("agent") or "Agent") and \
+                    active_alert["project"] == (a.get("project") or ""):
+                active_alert = None
+                if screen == "alert":
+                    leave_takeover()
+        if accepted:
             alerts.queue_pending(pending_alert, alerts.queue[-1], focused=_focused())
             if kind == "needs":
                 companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
