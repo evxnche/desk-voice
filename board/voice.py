@@ -289,6 +289,16 @@ def _problem(text, back):
     while time.ticks_diff(end, time.ticks_ms()) > 0 and not back():
         time.sleep_ms(50)
 
+def _run_board_commands(cmds, run):
+    problem = None
+    for cmd in cmds:
+        result = run(cmd)
+        if result is False and cmd.get("do") == "memory_add":
+            problem = "Memory not saved"
+        elif result is False and cmd.get("do") in ("memory_delete", "memory_clear"):
+            problem = "Memory not removed"
+    return problem
+
 def _sound(box, body, nl):
     """The reply's audio as PCM chunks, and how many PCM bytes there are in all."""
     if box.get("adpcm") is False:                   # plain PCM (an older server): wait for all of it
@@ -418,8 +428,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         if meta.get("radar"):
             flights.set_view(meta["radar"])
             cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
-        for cmd in cmds:
-            run(cmd)
+        memory_error = _run_board_commands(cmds, run)
         box["adpcm"] = meta.get("audio") == "adpcm"
         sound, total = _sound(box, body, nl)
         if cmds:
@@ -431,6 +440,11 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
             stream.quit = True
         if ended == "back":
             return "back"
+        if memory_error:
+            if ended == "interrupt":
+                pal.draw("huh", caption=pal.wrap(memory_error))
+            else:
+                _problem(memory_error, back)
         if meta.get("heard") and not huh and not meta.get("forget"):
             remember(meta["heard"], reply)
         return "interrupt" if ended == "interrupt" else {"board": cmds}

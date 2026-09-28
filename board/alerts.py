@@ -28,6 +28,17 @@ def latest_needs():
             return item.copy()
     return None
 
+def resolve(agent, project, pending=None):
+    """A later done event closes this agent/project request in every waiting alert queue."""
+    agent, project = agent or "Agent", project or ""
+    queue[:] = [item for item in queue if not (item["kind"] == "needs" and
+               item["agent"] == agent and item["project"] == project)]
+    _recent[:] = [seen for seen in _recent if not (seen[0][0] == agent and
+                  seen[0][1] == project and seen[0][2] == "needs")]
+    if pending is not None:
+        pending[:] = [record for record in pending if not (record["alert"]["kind"] == "needs" and
+                      record["alert"]["agent"] == agent and record["alert"]["project"] == project)]
+
 def _compact_routine(pending):
     routine = [(index, record) for index, record in enumerate(pending)
                if record["alert"]["kind"] != "needs"]

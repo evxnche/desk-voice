@@ -44,6 +44,10 @@ def needs_you(agent, project):
     _add("needs", "%s needs you%s." % (agent, " in " + _spoken(project) if project else ""),
          first=True, key=("needs", agent, project), urgent=True)
 
+def resolve_needs(agent, project):
+    key = ("needs", agent or "Your agent", project or "")
+    queue[:] = [item for item in queue if item["key"] != key]
+
 def flight_news(text):
     """The tracked flight took off, started coming down or landed (tracker.py)."""
     _add("flight", text)

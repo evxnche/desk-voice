@@ -134,6 +134,26 @@ class CompanionStateTests(unittest.TestCase):
         self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:03"))
         self.assertEqual(2, len(a.queue))
 
+    def test_done_resolves_matching_needs_without_erasing_other_alerts(self):
+        a, c = self.alerts, self.companion
+        pending = []
+        a.add("Claude", "Desk", "needs", "Approve", "10:00")
+        a.queue_pending(pending, a.queue[-1])
+        c.needs_you("Claude", "Desk")
+        a.add("Codex", "Other", "needs", "Review", "10:00")
+        a.queue_pending(pending, a.queue[-1])
+        c.needs_you("Codex", "Other")
+        a.add("Friend", "Chat", "message", "Hello", "10:00")
+        a.add("Claude", "Desk", "done", "Finished", "10:01")
+        a.resolve("Claude", "Desk", pending)
+        c.resolve_needs("Claude", "Desk")
+        self.assertEqual("Codex", a.latest_needs()["agent"])
+        self.assertEqual("Codex", a.next_pending(pending)["agent"])
+        self.assertNotIn("Claude", [item["alert"]["agent"] for item in pending])
+        self.assertEqual(["Codex"], [item["key"][1] for item in c.queue if item["kind"] == "needs"])
+        self.assertTrue(any(item["kind"] == "message" for item in a.queue))
+        self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:02"))
+
     def test_focus_defers_routine_pending_alerts_without_blocking_needs(self):
         pending = []
         for n in range(25):

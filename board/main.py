@@ -339,6 +339,9 @@ def handle(method, path, q, body):
         a = json.loads(body or b"{}")
         kind = "needs" if a.get("kind") == "needs" else "done"
         if alerts.add(a.get("agent"), a.get("project"), kind, a.get("message"), local_clock()):
+            if kind == "done":
+                alerts.resolve(a.get("agent"), a.get("project"), pending_alert)
+                companion.resolve_needs(a.get("agent"), a.get("project"))
             alerts.queue_pending(pending_alert, alerts.queue[-1], focused=_focused())
             if kind == "needs":
                 companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime

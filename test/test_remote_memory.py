@@ -109,6 +109,51 @@ class RemoteMemoryTests(unittest.TestCase):
         self.assertTrue(env["run"]({"do": "alert_show"}))
         self.assertEqual("alert", shown[-1])
 
+    def test_memory_mutation_routes_reject_get(self):
+        with open(os.path.join(BOARD, "main.py")) as handle:
+            source = ast.parse(handle.read())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in ("run", "handle")]
+        env = {"memories": self.memories, "alerts": self.modules["alerts"], "secrets": self.modules["secrets"],
+               "json": json, "remote": self.modules["remote"]}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "main.py", "exec"), env)
+        for path in ("/memories/add", "/memories/delete", "/memories/clear"):
+            self.assertEqual(404, env["handle"]("GET", path, {"text": "Surprise", "index": "0"}, b"")[0])
+        self.assertEqual([], self.memories.list_all())
+
+    def test_accepted_agent_done_route_resolves_waiting_request(self):
+        with open(os.path.join(BOARD, "main.py")) as handle:
+            source = ast.parse(handle.read())
+        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "handle"]
+        events = []
+        alerts = self.modules["alerts"]
+        alerts.queue = [{"agent": "Claude", "project": "Desk", "kind": "needs", "message": "Approve"}]
+
+        def add(agent, project, kind, message, at):
+            alerts.queue.append({"agent": agent, "project": project, "kind": kind, "message": message})
+            return True
+
+        alerts.add = add
+        alerts.resolve = lambda agent, project, pending: events.append(("alert", agent, project))
+        alerts.queue_pending = lambda pending, alert, focused=False: events.append(("pending", alert["kind"]))
+        companion = types.SimpleNamespace(resolve_needs=lambda agent, project: events.append(("speech", agent, project)))
+        env = {"alerts": alerts, "companion": companion, "pending_alert": [],
+               "secrets": self.modules["secrets"], "json": json, "local_clock": lambda: "10:01",
+               "_focused": lambda: False}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), "main.py", "exec"), env)
+        result = env["handle"]("POST", "/agent", {"k": "test"},
+                               b'{"agent":"Claude","project":"Desk","kind":"done","message":"Finished"}')
+        self.assertEqual(200, result[0])
+        self.assertEqual([("alert", "Claude", "Desk"), ("speech", "Claude", "Desk"),
+                          ("pending", "done")], events)
+
+    def test_board_reports_failed_memory_command_after_playback(self):
+        self.assertEqual("Memory not saved", self.voice._run_board_commands(
+            [{"do": "memory_add", "text": "No space"}], lambda cmd: False))
+        self.assertEqual("Memory not removed", self.voice._run_board_commands(
+            [{"do": "memory_delete", "text": "Missing"}], lambda cmd: False))
+        self.assertIsNone(self.voice._run_board_commands(
+            [{"do": "memory_clear"}], lambda cmd: True))
+
 
 if __name__ == "__main__":
     unittest.main()
