@@ -8,6 +8,7 @@ import { generateSpeech, generateText, jsonSchema, stepCountIs, tool, transcribe
 import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
+import { cleanFlight, track } from '../lib/track.js';
 import * as spotify from '../lib/spotify.js';
 import { decode as decodeAdpcm, encode as encodeAdpcm } from '../lib/adpcm.js';
 
@@ -193,10 +194,43 @@ function radarTools(view, changes, heard) {
   };
 }
 
+// Following one flight (the board's track screen). `tracked` is the flight the board follows now (X-Track).
+function trackTools(cmds, tracked) {
+  return {
+    track_flight: tool({
+      description: 'Follow a flight by its number (e.g. BA36) on the gadget\'s flight-tracker screen and get where it is ' +
+        'now: over which country, altitude, speed, km to go and minutes until it lands. Leave `flight` empty for the ' +
+        `flight already being followed${tracked ? ` (${tracked})` : ' (none right now)'}.`,
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { flight: { type: 'string' } },
+        additionalProperties: false,
+      }),
+      execute: async ({ flight }) => {
+        const f = cleanFlight(flight || tracked);
+        if (!f) return { ok: false, error: 'no flight number given and none is being followed' };
+        const same = cleanFlight(tracked) === f;
+        cmds.push(same ? { do: 'screen', name: 'track' } : { do: 'track', flight: f });
+        const t = await track(f);
+        if (!t.seen) t.note = 'Not on flight radar right now: not taken off yet, landed a while ago, or out of receiver range over the sea.';
+        return t;
+      },
+    }),
+    stop_tracking: tool({
+      description: 'Stop following the tracked flight.',
+      inputSchema: jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
+      execute: async () => {
+        cmds.push({ do: 'track', flight: '' });
+        return { ok: true };
+      },
+    }),
+  };
+}
+
 // Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
 function boardTools(cmds, spotifyRefresh) {
   const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
-    pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music' };
+    pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music', tracker: 'track' };
   return {
     start_timer: tool({
       description: 'Start a focus/countdown timer on the gadget\'s screen (big countdown, chime at the end).',
@@ -332,6 +366,10 @@ function needsSearch(question) {
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
 const GADGETY = /\b(timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to)\b/i;
 
+// "Track BA36", "how's the flight doing?", "when do they land?": the flight tracker, not the radar.
+const TRACKY = /\b(track(ing)?|follow(ing)?|land(ed|ing|s)?|arriv\w*|eta|(the|my|their|his|her|our|cousins?'?s?) flight|flight (status|doing)|[a-z]{2,3} ?\d{1,4})\b/i;
+const FLIGHT_NO = /\b[a-z]{2,3} ?\d{1,4}\b/i;
+
 const RADARY = /\b(radar|radius|range|zoom(ed)?|track(ing)?|(flights?|planes?|aircrafts?) (near|around|over|in|at|within))\b/i;
 
 // "Show me flights over Heathrow", "zoom the radar out": set_radar has to run first, or the model
@@ -460,6 +498,7 @@ export async function POST(request) {
   }
   const cmds = [];
   const spotifyRefresh = request.headers.get('x-spotify-refresh') || '';
+  const tracked = request.headers.get('x-track') || '';
   let text;
   const tChat = Date.now();
   try {
@@ -485,6 +524,8 @@ export async function POST(request) {
         'Use get_nearby_flights for questions about planes nearby, overhead or on the radar (planes 1 to 10 are numbered on screen). ' +
         'The gadget has screens (limits, today, pixel game, flights radar, music), a focus timer and Spotify control: ' +
         'use start_timer / timer_control, show_screen, spotify_play / spotify_control for those and confirm in a few words. ' +
+        'Use track_flight when asked to track or follow a flight by number, or how a followed flight is doing ' +
+        '(speak times as UK time and say roughly where it is); it opens the tracker screen. ' +
         'Use set_radar when asked to show, move or zoom the radar or to look at flights somewhere, then just confirm it in one ' +
         "short sentence; don't list the flights unless asked. " +
         `It is ${now} in London.` +
@@ -494,6 +535,7 @@ export async function POST(request) {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes, heard),
         ...boardTools(cmds, spotifyRefresh),
+        ...trackTools(cmds, tracked),
       },
       // The free-tier model sometimes skips searching for news and answers from stale memory, so
       // news-shaped questions must use a tool on the first step (web_search is the only one that fits).
@@ -502,6 +544,8 @@ export async function POST(request) {
       // without calling set_radar.
       prepareStep: ({ stepNumber }) =>
         stepNumber !== 0 ? {}
+          : (tracked || FLIGHT_NO.test(heard)) && TRACKY.test(heard) && !MOVE_RADAR.test(heard)
+            ? { toolChoice: { type: 'tool', toolName: 'track_flight' } }
           : MOVE_RADAR.test(heard) ? { toolChoice: { type: 'tool', toolName: 'set_radar' } }
           : needsSearch(heard) || RADARY.test(heard) || GADGETY.test(heard) ? { toolChoice: 'required' } : {},
       stopWhen: stepCountIs(4),
@@ -523,7 +567,7 @@ export async function POST(request) {
     // for flights (a set_radar move already does that), "today" for weather, music for Spotify.
     const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));
     if (!changes.set && !cmds.length) {
-      if (used.includes('get_nearby_flights') || FLIGHTY.test(heard)) cmds.push({ do: 'screen', name: 'flights' });
+      if (used.includes('get_nearby_flights') || (FLIGHTY.test(heard) && !used.includes('track_flight'))) cmds.push({ do: 'screen', name: 'flights' });
       else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
     }
     if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
