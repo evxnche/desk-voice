@@ -294,15 +294,31 @@ def _post(job, box, back, face):
         time.sleep_ms(20)
     return True
 
-def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=False):
+def _speak(sound, back, tapped, between):
+    """Play a reply: "done", "back" (BOOT) or "interrupt" (KEY tapped: stop talking and listen)."""
+    if tapped:
+        tapped()                                     # forget the press that asked the question
+    why = []
+    def stop():
+        if back():
+            why.append("back")
+        elif tapped and tapped():
+            why.append("interrupt")
+        return bool(why)
+    if audio.play(sound, volume=0xBF, mono=True, stop=stop, between=between):
+        return "done"
+    return why[0] if why else "back"
+
+def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=False, tapped=None):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
     is given, or with `followup`, whatever you say in the FOLLOWUP_MS after an answer (no wake phrase;
     `keep_screen` leaves the answer's screen up meanwhile). The Pal listens, thinks, then speaks the
     reply with its words underneath. If the reply comes with board commands (a screen for the weather,
     flights or music, a timer...) they `run` first, `tick(False)` draws that screen, and the reply is
-    spoken over it with `tick(True)` keeping it up to date.
+    spoken over it with `tick(True)` keeping it up to date. `tapped()` (True once per KEY press)
+    stops the reply so you can talk.
     Returns "back" as soon as `boot` is pressed at any stage, "quiet" if no follow-up came, None after
-    a problem or a slip of the KEY, else {"board": [commands run]}."""
+    a problem or a slip of the KEY, "interrupt" if KEY cut the reply short, else {"board": [commands run]}."""
     back = lambda: not boot.value()
     wake = audio.WAKE_PHRASES[heard[0]] if heard else ""
     hdrs = _headers(wake, followup)
@@ -315,6 +331,8 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
     phone.hush(True)                                 # Bluetooth advertising slows Wi-Fi 2-8x
     try:
         if followup:
+            while not key.value():                   # let go of the KEY that interrupted the last reply
+                time.sleep_ms(10)
             audio.listen()                           # its ring buffer holds whatever you say next
             pcm = audio.record_followup(MAX_SECONDS, FOLLOWUP_MS, stop=lambda: back() or not key.value(),
                                         progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
@@ -383,23 +401,23 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
             tick(False)
         else:
             face.speaking(reply, huh, total)
-        if not audio.play(face.voiced(sound), volume=0xBF, mono=True, stop=back,
-                          between=(lambda: tick(True)) if cmds else face.mouth):
-            if stream:
-                stream.quit = True
+        ended = _speak(face.voiced(sound), back, tapped, (lambda: tick(True)) if cmds else face.mouth)
+        if ended != "done" and stream:
+            stream.quit = True
+        if ended == "back":
             return "back"
         if meta.get("heard") and not huh and not meta.get("forget"):
             remember(meta["heard"], reply)
-        return {"board": cmds}
+        return "interrupt" if ended == "interrupt" else {"board": cmds}
     finally:
         phone.hush(False)
 
 SAY_URL = secrets.VOICE_URL.replace("/api/voice", "/api/say") + "?k=" + secrets.VOICE_KEY
 
-def say(text, boot, connect):
+def say(text, boot, connect, tapped=None):
     """Speak up unprompted (companion.py): the Pal hops with a "!" while desk-voice turns `text` into
     Ara's voice, then says it with the words underneath. False if it couldn't (no Wi-Fi, a server
-    without /api/say) or BOOT stopped it."""
+    without /api/say) or BOOT stopped it, "interrupt" if a KEY tap did (you want to talk)."""
     back = lambda: not boot.value()
     lines = pal.wrap(text)[:5]
     pal.draw("alert", 0, lines)
@@ -420,9 +438,10 @@ def say(text, boot, connect):
         box["adpcm"] = json.loads(body[:nl]).get("audio") == "adpcm"
         sound, total = _sound(box, body, nl)
         face.speaking(text, False, total)
-        if not audio.play(face.voiced(sound), volume=0xBF, mono=True, stop=back, between=face.mouth):
+        ended = _speak(face.voiced(sound), back, tapped, face.mouth)
+        if ended == "back":
             return False
         remember("", text)
-        return True
+        return "interrupt" if ended == "interrupt" else True
     finally:
         phone.hush(False)

@@ -147,6 +147,24 @@ def key_press():
         key_hit = False                  # this press (and its release bounce) is handled
     return action
 
+def key_tapped():
+    """True once per KEY press since the last call (the IRQ latches taps too quick to poll)."""
+    global key_hit
+    hit = key_hit or not key.value()
+    key_hit = False
+    return hit
+
+def converse(result):
+    """After an answer, or a KEY tap that cut one short: keep listening for replies (no wake phrase)
+    until none comes. An answer that opened a screen (weather, radar, music) stays up meanwhile.
+    Returns the last result and whether that screen is still up."""
+    on_screen = False
+    while isinstance(result, dict) or result == "interrupt":
+        on_screen = isinstance(result, dict) and bool(result["board"])
+        result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=on_screen,
+                           tapped=key_tapped)
+    return result, on_screen
+
 def pixel_key():
     """KEY on the pixel screen: jump the instant it goes down; 'hold' after 0.4 s (voice)."""
     global key_down_at
@@ -453,12 +471,7 @@ while True:
     elif action == "hold":
         result, on_screen = None, False
         try:
-            result = voice.ask(key, boot, connect, run, tick_screen, heard)
-            while isinstance(result, dict):
-                # Listen a few seconds for a reply, no "gee gee" needed; an answer that opened a
-                # screen (weather, radar, music) stays up meanwhile.
-                on_screen = bool(result["board"])
-                result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=on_screen)
+            result, on_screen = converse(voice.ask(key, boot, connect, run, tick_screen, heard, tapped=key_tapped))
         except Exception as e:
             dashboard.message("Voice failed", str(e))
             time.sleep(5)
@@ -506,7 +519,9 @@ while True:
         if line:
             said = False
             try:
-                said = voice.say(line[1], boot, connect)
+                said = voice.say(line[1], boot, connect, tapped=key_tapped)
+                if said == "interrupt":              # KEY tapped: it stops and listens to you
+                    converse(said)
             except Exception as e:
                 print("say failed:", e)
             while not boot.value():
