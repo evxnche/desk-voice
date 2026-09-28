@@ -81,6 +81,16 @@ class CompanionStateTests(unittest.TestCase):
         self.assertEqual(6, len(a.queue))
         self.assertIsNone(a.latest_needs())
 
+    def test_focus_defers_routine_pending_alerts_without_blocking_needs(self):
+        pending = ["done", "message", "needs"]
+        self.assertEqual("needs", self.alerts.next_pending(pending, focused=True))
+        self.assertEqual(["done", "message"], pending)
+        self.assertIsNone(self.alerts.next_pending(pending, focused=True))
+        self.assertEqual(["done", "message"], pending)
+        self.assertEqual("done", self.alerts.next_pending(pending, focused=False))
+        self.assertEqual("message", self.alerts.next_pending(pending, focused=False))
+        self.assertEqual([], pending)
+
     def test_focus_defers_ordinary_lines_but_allows_urgent_needs(self):
         c = self.companion
         c.flight_news("Flight landed")

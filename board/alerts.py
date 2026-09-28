@@ -21,6 +21,17 @@ def latest_needs():
             return item.copy()
     return None
 
+def next_pending(pending, focused=False):
+    """Take the next alert allowed to interrupt; leave routine focus alerts waiting."""
+    if not pending:
+        return None
+    if not focused:
+        return pending.pop(0)
+    for index, kind in enumerate(pending):
+        if kind == "needs":
+            return pending.pop(index)
+    return None
+
 def clear():
     queue.clear()
 

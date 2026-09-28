@@ -374,6 +374,10 @@ def boot_tapped():
 
 screen = "pal"
 timer_second = None
+
+def _focused():
+    return timer.active and not timer.paused and timer.label.strip().lower().startswith("focus")
+
 def tick_screen(speaking=False):
     """Keep the current screen up to date; call often. While `speaking` (an answer playing over the
     screen) only the radar keeps going (~80 ms a frame): the other screens take 0.3-1 s to redraw,
@@ -429,11 +433,10 @@ while True:
         m = phone.inbox.pop(0)
         if alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock()):
             pending_alert.append("message")
-    if pending_alert and pending_alert[0] == "needs":
-        pending_alert.pop(0)
+    kind = alerts.next_pending(pending_alert, focused=_focused())
+    if kind == "needs":
         alerts.chime("needs")                    # the Pal then says who needs you (companion queue)
-    elif pending_alert:
-        kind = pending_alert.pop(0)
+    elif kind:
         if screen != "alert":
             screen = "alert"
             redraw()
@@ -535,8 +538,7 @@ while True:
         if room.weather_is_home:
             companion.check_rain(room.weather)
     if action is None and not heard and screen not in ("alert", "timer_done"):
-        focused = timer.active and not timer.paused and timer.label.strip().lower().startswith("focus")
-        line = companion.next_line(pal.ambient.hearing, focused=focused)
+        line = companion.next_line(pal.ambient.hearing, focused=_focused())
         if line:
             said = False
             try:
