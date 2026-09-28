@@ -306,11 +306,11 @@ def handle(method, path, q, body):
         return 200, "application/json", json.dumps(connect_agent(path, q))
     if path == "/agent":
         a = json.loads(body or b"{}")
-        alerts.add(a.get("agent"), a.get("project"), "needs" if a.get("kind") == "needs" else "done",
-                   a.get("message"), local_clock())
-        pending_alert.append(alerts.queue[-1]["kind"])
-        if a.get("kind") == "needs":
-            companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
+        kind = "needs" if a.get("kind") == "needs" else "done"
+        if alerts.add(a.get("agent"), a.get("project"), kind, a.get("message"), local_clock()):
+            pending_alert.append(kind)
+            if kind == "needs":
+                companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
         return 200, "application/json", '{"ok":true}'
     if path == "/spotify-token" and q.get("refresh"):
         music.save_token(q["refresh"])
@@ -427,8 +427,8 @@ while True:
     phone.tick()
     while phone.inbox:
         m = phone.inbox.pop(0)
-        alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock())
-        pending_alert.append("message")
+        if alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock()):
+            pending_alert.append("message")
     if pending_alert and pending_alert[0] == "needs":
         pending_alert.pop(0)
         alerts.chime("needs")                    # the Pal then says who needs you (companion queue)
@@ -535,7 +535,8 @@ while True:
         if room.weather_is_home:
             companion.check_rain(room.weather)
     if action is None and not heard and screen not in ("alert", "timer_done"):
-        line = companion.next_line(pal.ambient.hearing)
+        focused = timer.active and not timer.paused and timer.label.strip().lower().startswith("focus")
+        line = companion.next_line(pal.ambient.hearing, focused=focused)
         if line:
             said = False
             try:

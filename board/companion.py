@@ -8,29 +8,41 @@ import pal, room
 
 GAP_MS = 10 * 60 * 1000       # at most one unprompted line this often ("needs you" excepted)
 STALE_MS = 30 * 60 * 1000     # a line still waiting after this (quiet hours) is dropped
+MAX_QUEUE = 12
 LIMIT_PCT = 90
 MORNING_HELLO = True
 HELLO_FROM, HELLO_UNTIL = 7, 12
 
-queue = []                    # [(kind, text, queued at)]
+queue = []                    # [{kind, text, at, key, urgent}]
 _last_said = None
 _limit_warned = None          # windows already warned about ("Claude 5-hr"), until they drop below LIMIT_PCT
 _rain_warned = False
 _hello_day = None
 
-def _add(kind, text, first=False):
-    item = (kind, text, time.ticks_ms())
-    queue[:] = [q for q in queue if q[0] != kind or kind == "needs"]   # the newest of each kind
+def _add(kind, text, first=False, key=None, urgent=False):
+    now = time.ticks_ms()
+    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < STALE_MS]
+    key = key or kind
+    if kind == "needs" and any(q["key"] == key for q in queue):
+        return False
+    if kind != "needs":
+        queue[:] = [q for q in queue if q["kind"] != kind]
+    item = {"kind": kind, "text": text, "at": now, "key": key, "urgent": urgent}
     if first:
         queue.insert(0, item)
     else:
         queue.append(item)
+    del queue[MAX_QUEUE:]
+    return True
 
 def _spoken(name):
     return name.replace("-", " ").replace("_", " ")
 
 def needs_you(agent, project):
-    _add("needs", "%s needs you%s." % (agent or "Your agent", " in " + _spoken(project) if project else ""), first=True)
+    agent = agent or "Your agent"
+    project = project or ""
+    _add("needs", "%s needs you%s." % (agent, " in " + _spoken(project) if project else ""),
+         first=True, key=("needs", agent, project), urgent=True)
 
 def flight_news(text):
     """The tracked flight took off, started coming down or landed (tracker.py)."""
@@ -83,16 +95,18 @@ def heard_you(limits):
     _add("hello", " ".join(parts))
 
 def drop(kind):
-    queue[:] = [q for q in queue if q[0] != kind]
+    queue[:] = [q for q in queue if q["kind"] != kind]
 
-def next_line(hearing):
+def next_line(hearing, focused=False):
     """(kind, text) to say now, or None. `hearing(ms)`: someone talked in the last ms."""
     global _last_said
     now = time.ticks_ms()
-    queue[:] = [q for q in queue if q[0] == "needs" or time.ticks_diff(now, q[2]) < STALE_MS]
+    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < STALE_MS]
     for item in queue:
-        kind, text, _ = item
-        if kind != "needs":
+        kind, text = item["kind"], item["text"]
+        if focused and not item["urgent"]:
+            continue
+        if not item["urgent"]:
             if hearing(2000):                                   # don't talk over you
                 return None
             if kind != "hello" and pal.quiet_hours():           # the hello only comes when you're up

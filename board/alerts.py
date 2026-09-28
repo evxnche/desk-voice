@@ -6,9 +6,20 @@ import dashboard, font5, audio
 queue = []            # newest last: {"agent", "project", "kind": "needs"|"done"|"message", "message", "at"}
 
 def add(agent, project, kind, message, at):
-    queue.append({"agent": agent or "Agent", "project": project or "", "kind": kind,
-                  "message": message or "", "at": at})
+    item = {"agent": agent or "Agent", "project": project or "", "kind": kind,
+            "message": message or "", "at": at}
+    if any(all(old[field] == item[field] for field in ("agent", "project", "kind", "message"))
+           for old in queue):
+        return False
+    queue.append(item)
     del queue[:-6]    # keep the last few
+    return True
+
+def latest_needs():
+    for item in reversed(queue):
+        if item["kind"] == "needs":
+            return item.copy()
+    return None
 
 def clear():
     queue.clear()
