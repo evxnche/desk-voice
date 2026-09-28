@@ -58,6 +58,16 @@ class CompanionStateTests(unittest.TestCase):
             self.assertTrue(memories.clear())
             self.assertEqual([], memories.list_all())
 
+    def test_memories_trim_at_140_utf8_bytes_without_splitting_emoji(self):
+        with tempfile.TemporaryDirectory() as directory:
+            memories = importlib.import_module("memories")
+            memories.PATH = os.path.join(directory, "memories.json")
+            self.assertTrue(memories.add("🦀" * 36))
+            self.assertEqual(["🦀" * 35], memories.list_all())
+            self.assertEqual(140, len(memories.list_all()[0].encode("utf-8")))
+            self.assertTrue(memories.add("A" * 139 + "🦀"))
+            self.assertEqual("A" * 139, memories.list_all()[1])
+
     def test_memories_recover_from_invalid_file(self):
         with tempfile.TemporaryDirectory() as directory:
             memories = importlib.import_module("memories")

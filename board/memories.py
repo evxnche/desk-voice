@@ -9,7 +9,15 @@ MAX_LENGTH = 140
 
 
 def _clean(text):
-    return " ".join(str(text or "").split())[:MAX_LENGTH].strip()
+    value = " ".join(str(text or "").split())
+    result, size = [], 0
+    for char in value:
+        width = len(char.encode("utf-8"))
+        if size + width > MAX_LENGTH:
+            break
+        result.append(char)
+        size += width
+    return "".join(result).strip()
 
 
 def list_all():

@@ -228,7 +228,7 @@ function trackTools(cmds, tracked) {
 }
 
 // Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
-function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert: null }) {
+export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert: null }) {
   const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
     pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music', tracker: 'track' };
   return {
@@ -237,7 +237,7 @@ function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert:
       inputSchema: jsonSchema({ type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false }),
       execute: async ({ text }) => {
         const clean = String(text || '').trim();
-        if (!clean || clean.length > 140 || deviceContext.memories.length >= 12) return { ok: false, error: 'Memory is empty, too long, or full' };
+        if (!clean || Buffer.byteLength(clean, 'utf8') > 140 || deviceContext.memories.length >= 12) return { ok: false, error: 'Memory is empty, too long, or full' };
         cmds.push({ do: 'memory_add', text: clean });
         return { ok: true, pending_on_board: true };
       },
@@ -442,7 +442,7 @@ function boundedHeader(request, name, maxEncoded) {
 export function decodeDeviceContext(request) {
   const rawMemories = boundedHeader(request, 'x-memories', 2500);
   const memories = Array.isArray(rawMemories) && rawMemories.length <= 12 &&
-    rawMemories.every((value) => typeof value === 'string' && value.length > 0 && value.length <= 140)
+    rawMemories.every((value) => typeof value === 'string' && Buffer.byteLength(value, 'utf8') > 0 && Buffer.byteLength(value, 'utf8') <= 140)
     ? rawMemories : [];
   const rawAlert = boundedHeader(request, 'x-agent-alert', 1800);
   const alert = rawAlert && !Array.isArray(rawAlert) && rawAlert.kind === 'needs' &&
@@ -457,6 +457,25 @@ export function firstToolFor(heard, hasAlert) {
   if (/\b(forget (all|every|everything|my|the|a|this) .*(remember|memory|memories|preference|fact)|forget (my|the|a|this) (preference|fact|memory)|remove (my|the|a|this) (memory|preference|fact)|clear (all )?(saved|personal) memories)\b/i.test(heard)) return 'forget_memory';
   if (/\b(show (me )?(the )?(latest |last )?(agent )?alert|what does (claude|codex|the agent|it) need|what (is|was) (claude|codex|the agent) asking)\b/i.test(heard)) return hasAlert || /show .*alert/i.test(heard) ? 'show_agent_alert' : null;
   return null;
+}
+
+export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used) {
+  if (namedTool) return;
+  // Action requests can still work when the model omits a tool call.
+  const mins = /(\d+(?:\.\d+)?)\s*-?\s*(minute|min)s?\b/i.exec(wordsToDigits(heard));
+  if (mins && /\b(timer|focus|pomodoro|countdown|break)\b/i.test(heard) && !cmds.some((c) => c.do === 'timer')) {
+    cmds.push({ do: 'timer', minutes: Number(mins[1]), label: /\bbreak\b/i.test(heard) ? 'Break' : 'Focus' });
+  }
+  const spoken = RADARY.test(heard) && spokenRangeNm(heard);
+  if (spoken && Math.abs(view.radius - clampRadius(spoken)) > 0.5) {
+    view.radius = clampRadius(spoken);
+    changes.set = true;
+  }
+  if (!changes.set && !cmds.length) {
+    if (used.includes('get_nearby_flights') || (FLIGHTY.test(heard) && !used.includes('track_flight'))) cmds.push({ do: 'screen', name: 'flights' });
+    else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
+  }
+  if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
 }
 
 const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
@@ -553,7 +572,7 @@ export async function POST(request) {
     home: { lat: ipHome.lat, lon: ipHome.lon, place: ipHome.place },
   };
   const changes = {};
-  const weatherNow = WEATHERY.test(heard) ? await Promise.race([homeWeather, sleep(1500)]) : null;
+  const weatherNow = !namedTool && WEATHERY.test(heard) ? await Promise.race([homeWeather, sleep(1500)]) : null;
   if (weatherNow) {
     // What the get_weather tool would have shown on the board's today screen.
     changes.weather = { data: { place: view.home.place || 'home', ...weatherNow }, home: true };
@@ -597,7 +616,7 @@ export async function POST(request) {
         `It is ${now} in London.` +
         (limits ? ` The owner's AI coding agent usage limits right now: ${limits}.` : ''),
       messages: [...history, { role: 'user', content: heard }],
-      tools: {
+      tools: namedTool ? { [namedTool]: boardTools(cmds, spotifyRefresh, deviceContext)[namedTool] } : {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes, heard),
         ...boardTools(cmds, spotifyRefresh, deviceContext),
@@ -619,25 +638,8 @@ export async function POST(request) {
       maxOutputTokens: 400,
     });
     text = result.text;
-    // Backstop: "start a 25 minute focus" always starts a timer, tool call or not.
-    const mins = /(\d+(?:\.\d+)?)\s*-?\s*(minute|min)s?\b/i.exec(wordsToDigits(heard));
-    if (mins && /\b(timer|focus|pomodoro|countdown|break)\b/i.test(heard) && !cmds.some((c) => c.do === 'timer')) {
-      cmds.push({ do: 'timer', minutes: Number(mins[1]), label: /\bbreak\b/i.test(heard) ? 'Break' : 'Focus' });
-    }
-    // Backstop: a radar request with a distance always applies the distance, tool call or not.
-    const spoken = RADARY.test(heard) && spokenRangeNm(heard);
-    if (spoken && Math.abs(view.radius - clampRadius(spoken)) > 0.5) {
-      view.radius = clampRadius(spoken);
-      changes.set = true;
-    }
-    // The board switches to the screen that goes with the answer before speaking it: the radar
-    // for flights (a set_radar move already does that), "today" for weather, music for Spotify.
     const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));
-    if (!changes.set && !cmds.length) {
-      if (used.includes('get_nearby_flights') || (FLIGHTY.test(heard) && !used.includes('track_flight'))) cmds.push({ do: 'screen', name: 'flights' });
-      else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
-    }
-    if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
+    applyBoardBackstops(heard, namedTool, cmds, view, changes, used);
     console.log('heard:', heard, '| tools:', JSON.stringify(result.steps.flatMap((st) => st.toolCalls.map((c) => [c.toolName, c.input]))));
   } catch (e) {
     // The free tier allows ~5 model calls a minute, and a tool-using answer takes 2-3 of them.
