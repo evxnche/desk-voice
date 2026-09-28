@@ -1,5 +1,7 @@
 """Small, explicit facts the Pal may remember between restarts."""
 import json
+import os
+import errno
 
 PATH = "memories.json"
 MAX_MEMORIES = 12
@@ -11,11 +13,14 @@ def _clean(text):
 
 
 def list_all():
-    try:
-        with open(PATH) as source:
-            saved = json.load(source)
-    except (OSError, ValueError, TypeError):
-        return []
+    saved = None
+    for path in (PATH, PATH + ".bak"):
+        try:
+            with open(path) as source:
+                saved = json.load(source)
+            break
+        except (OSError, ValueError, TypeError):
+            pass
     if not isinstance(saved, list):
         return []
     entries = []
@@ -30,11 +35,39 @@ def list_all():
 
 
 def _save(entries):
+    temporary = PATH + ".tmp"
+    backup = PATH + ".bak"
     try:
-        with open(PATH, "w") as target:
+        with open(temporary, "w") as target:
             json.dump(entries, target)
+        with open(temporary) as source:
+            if json.load(source) != entries:
+                raise ValueError("memory write did not validate")
+        try:
+            os.rename(temporary, PATH)
+        except OSError as error:
+            if not error.args or error.args[0] != errno.EEXIST:
+                raise
+            try:
+                os.remove(backup)
+            except OSError:
+                pass
+            os.rename(PATH, backup)
+            try:
+                os.rename(temporary, PATH)
+            except OSError:
+                os.rename(backup, PATH)
+                raise
+        try:
+            os.remove(backup)
+        except OSError:
+            pass
         return True
     except (OSError, ValueError, TypeError):
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
         return False
 
 

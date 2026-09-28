@@ -1,5 +1,6 @@
 """Host-side checks for small pieces of companion state."""
 import importlib
+import errno
 import os
 import sys
 import tempfile
@@ -67,6 +68,40 @@ class CompanionStateTests(unittest.TestCase):
             self.assertFalse(memories.delete(0))
             self.assertFalse(memories.add(""))
 
+    def test_failed_memory_write_preserves_existing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            memories = importlib.import_module("memories")
+            memories.PATH = os.path.join(directory, "memories.json")
+            self.assertTrue(memories.add("Keep this preference"))
+            with open(memories.PATH) as source:
+                original = source.read()
+
+            def partial_write(_, target):
+                target.write("[")
+                raise OSError("disk full")
+
+            with patch.object(memories.json, "dump", side_effect=partial_write):
+                self.assertFalse(memories.add("New preference"))
+            with open(memories.PATH) as source:
+                self.assertEqual(original, source.read())
+            self.assertEqual(["Keep this preference"], memories.list_all())
+
+    def test_memory_save_replaces_existing_file_on_fat_style_rename(self):
+        with tempfile.TemporaryDirectory() as directory:
+            memories = importlib.import_module("memories")
+            memories.PATH = os.path.join(directory, "memories.json")
+            self.assertTrue(memories.add("First"))
+            actual_rename = os.rename
+
+            def fat_rename(source, target):
+                if os.path.exists(target):
+                    raise OSError(errno.EEXIST, "target exists")
+                return actual_rename(source, target)
+
+            with patch.object(memories.os, "rename", side_effect=fat_rename):
+                self.assertTrue(memories.add("Second"))
+            self.assertEqual(["First", "Second"], memories.list_all())
+
     def test_alerts_deduplicate_and_expose_latest_needs_copy(self):
         a = self.alerts
         self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:00"))
@@ -81,15 +116,37 @@ class CompanionStateTests(unittest.TestCase):
         self.assertEqual(6, len(a.queue))
         self.assertIsNone(a.latest_needs())
 
+    def test_alert_duplicate_is_accepted_again_after_short_window(self):
+        a = self.alerts
+        self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:00"))
+        self.assertFalse(a.add("Claude", "Desk", "needs", "Approve", "10:01"))
+        self.now += a.DEDUP_MS + 1
+        self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:03"))
+        self.assertEqual(2, len(a.queue))
+
     def test_focus_defers_routine_pending_alerts_without_blocking_needs(self):
-        pending = ["done", "message", "needs"]
-        self.assertEqual("needs", self.alerts.next_pending(pending, focused=True))
-        self.assertEqual(["done", "message"], pending)
+        pending = []
+        for n in range(25):
+            alert = {"agent": "Agent", "project": "Desk", "kind": "done" if n % 2 else "message",
+                     "message": "Update %d" % n, "at": "10:00"}
+            self.alerts.queue_pending(pending, alert, focused=True)
+        self.assertLessEqual(len(pending), self.alerts.MAX_PENDING)
+        needs = {"agent": "Claude", "project": "Desk", "kind": "needs", "message": "Approve", "at": "10:01"}
+        self.alerts.queue_pending(pending, needs, focused=True)
+        self.assertEqual(needs, self.alerts.next_pending(pending, focused=True))
         self.assertIsNone(self.alerts.next_pending(pending, focused=True))
-        self.assertEqual(["done", "message"], pending)
-        self.assertEqual("done", self.alerts.next_pending(pending, focused=False))
-        self.assertEqual("message", self.alerts.next_pending(pending, focused=False))
+        summary = self.alerts.next_pending(pending, focused=False)
+        self.assertEqual("summary", summary["kind"])
+        self.assertEqual(25, summary["count"])
+        self.assertIn("Update 24", summary["message"])
         self.assertEqual([], pending)
+
+    def test_pending_alert_keeps_its_own_snapshot(self):
+        pending = []
+        alert = {"agent": "Claude", "project": "Desk", "kind": "done", "message": "Original", "at": "10:00"}
+        self.alerts.queue_pending(pending, alert)
+        alert["message"] = "Changed"
+        self.assertEqual("Original", self.alerts.next_pending(pending)["message"])
 
     def test_focus_defers_ordinary_lines_but_allows_urgent_needs(self):
         c = self.companion

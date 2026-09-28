@@ -191,7 +191,7 @@ def redraw():
     if screen == "music":
         music.enter()
     if screen == "alert":
-        alerts.draw()
+        alerts.draw(active_alert)
     if screen == "timer_done":
         timer.draw_done()
     if screen == "pixel":
@@ -308,7 +308,7 @@ def handle(method, path, q, body):
         a = json.loads(body or b"{}")
         kind = "needs" if a.get("kind") == "needs" else "done"
         if alerts.add(a.get("agent"), a.get("project"), kind, a.get("message"), local_clock()):
-            pending_alert.append(kind)
+            alerts.queue_pending(pending_alert, alerts.queue[-1], focused=_focused())
             if kind == "needs":
                 companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
         return 200, "application/json", '{"ok":true}'
@@ -346,7 +346,8 @@ def connect_agent(path, q):
     next_fetch = time.ticks_ms()          # show the new numbers right away
     return {"ok": True}
 
-pending_alert = []    # alert kinds waiting to chime (the HTTP handler must answer fast)
+pending_alert = []    # bounded alert snapshots waiting to chime (the HTTP handler must answer fast)
+active_alert = None
 ALERT_MS = 3000       # agent alerts dismiss themselves after this
 MESSAGE_MS = 8000     # WhatsApp messages stay long enough to read
 alert_until = 0
@@ -432,16 +433,19 @@ while True:
     while phone.inbox:
         m = phone.inbox.pop(0)
         if alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock()):
-            pending_alert.append("message")
-    kind = alerts.next_pending(pending_alert, focused=_focused())
+            alerts.queue_pending(pending_alert, alerts.queue[-1], focused=_focused())
+    active = alerts.next_pending(pending_alert, focused=_focused())
+    kind = active["kind"] if active else None
     if kind == "needs":
+        active_alert = active
         alerts.chime("needs")                    # the Pal then says who needs you (companion queue)
     elif kind:
+        active_alert = active
         if screen != "alert":
             screen = "alert"
             redraw()
         else:
-            alerts.draw()
+            alerts.draw(active_alert)
         alerts.chime(kind)
         alert_until = time.ticks_add(time.ticks_ms(), MESSAGE_MS if kind == "message" else ALERT_MS)
     if screen == "alert" and time.ticks_diff(time.ticks_ms(), alert_until) >= 0:

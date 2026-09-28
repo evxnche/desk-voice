@@ -4,13 +4,20 @@ import time, math, struct
 import dashboard, font5, audio
 
 queue = []            # newest last: {"agent", "project", "kind": "needs"|"done"|"message", "message", "at"}
+DEDUP_MS = 2 * 60 * 1000
+MAX_PENDING = 6
+_recent = []          # (agent, project, kind, message), ticks_ms
 
 def add(agent, project, kind, message, at):
     item = {"agent": agent or "Agent", "project": project or "", "kind": kind,
             "message": message or "", "at": at}
-    if any(all(old[field] == item[field] for field in ("agent", "project", "kind", "message"))
-           for old in queue):
+    now = time.ticks_ms()
+    _recent[:] = [seen for seen in _recent if time.ticks_diff(now, seen[1]) < DEDUP_MS]
+    key = (item["agent"], item["project"], item["kind"], item["message"])
+    if any(seen[0] == key for seen in _recent):
         return False
+    _recent.append((key, now))
+    del _recent[:-12]
     queue.append(item)
     del queue[:-6]    # keep the last few
     return True
@@ -21,16 +28,44 @@ def latest_needs():
             return item.copy()
     return None
 
+def _compact_routine(pending):
+    routine = [(index, record) for index, record in enumerate(pending)
+               if record["alert"]["kind"] != "needs"]
+    if len(routine) < 2:
+        return
+    total = sum(record["count"] for _, record in routine)
+    first = routine[0][0]
+    latest = routine[-1][1]["alert"]
+    pending[:] = [record for record in pending if record["alert"]["kind"] == "needs"]
+    pending.insert(first, {"alert": latest, "count": total})
+
+def queue_pending(pending, alert, focused=False):
+    """Hold an alert's own details; collapse routine updates while focus is active."""
+    pending.append({"alert": alert.copy(), "count": 1})
+    if focused or len(pending) > MAX_PENDING:
+        _compact_routine(pending)
+    while len(pending) > MAX_PENDING:
+        oldest_urgent = next((i for i, record in enumerate(pending)
+                              if record["alert"]["kind"] == "needs"), 0)
+        pending.pop(oldest_urgent)
+
 def next_pending(pending, focused=False):
-    """Take the next alert allowed to interrupt; leave routine focus alerts waiting."""
+    """Take an urgent alert first, or one routine alert once focus ends."""
     if not pending:
         return None
-    if not focused:
-        return pending.pop(0)
-    for index, kind in enumerate(pending):
-        if kind == "needs":
-            return pending.pop(index)
-    return None
+    for index, record in enumerate(pending):
+        if record["alert"]["kind"] == "needs":
+            return pending.pop(index)["alert"]
+    if focused:
+        _compact_routine(pending)
+        return None
+    record = pending.pop(0)
+    alert = record["alert"]
+    if record["count"] == 1:
+        return alert
+    latest = "%s%s: %s" % (alert["agent"], " in " + alert["project"] if alert["project"] else "", alert["message"])
+    return {"agent": "Updates", "project": "", "kind": "summary", "count": record["count"],
+            "message": "Latest: " + latest, "at": alert["at"]}
 
 def clear():
     queue.clear()
@@ -50,18 +85,20 @@ def chime(kind):
     audio.play(buf, volume=0xC8, mono=True)
 
 def _title(a):
+    if a["kind"] == "summary":
+        return "%d updates" % a["count"]
     if a["kind"] == "message":
         return a["agent"]
     return "%s needs you" % a["agent"] if a["kind"] == "needs" else "%s is done" % a["agent"]
 
-def draw():
+def draw(alert=None):
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
-    if not queue:
+    if not queue and alert is None:
         d.show()
         return
-    a = queue[-1]
+    a = alert if alert is not None else queue[-1]
     c.fill_rect(0, 0, 400, 34, 1)
     d.text("WHATSAPP" if a["kind"] == "message" else "AGENT", 10, 13, 0)
     d.text(a["at"], 392 - 8 * len(a["at"]), 13, 0)
