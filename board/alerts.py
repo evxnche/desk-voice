@@ -4,8 +4,10 @@ import time, math, struct
 import dashboard, font5, audio, palicon
 
 queue = []            # newest last: {"agent", "project", "kind": "needs"|"done"|"message", "message", "at"}
+unresolved = []       # needs awaiting a matching done, independent of dismissed display history
 DEDUP_MS = 2 * 60 * 1000
 MAX_PENDING = 6
+MAX_UNRESOLVED = 6
 _recent = []          # (agent, project, kind, message), ticks_ms
 
 def add(agent, project, kind, message, at):
@@ -18,19 +20,23 @@ def add(agent, project, kind, message, at):
         return False
     _recent.append((key, now))
     del _recent[:-12]
+    if kind == "needs":
+        unresolved[:] = [saved for saved in unresolved if not (saved["agent"] == item["agent"] and
+                          saved["project"] == item["project"])]
+        unresolved.append(item.copy())
+        del unresolved[:-MAX_UNRESOLVED]
     queue.append(item)
     del queue[:-6]    # keep the last few
     return True
 
 def latest_needs():
-    for item in reversed(queue):
-        if item["kind"] == "needs":
-            return item.copy()
-    return None
+    return unresolved[-1].copy() if unresolved else None
 
 def resolve(agent, project, pending=None):
     """A later done event closes this agent/project request in every waiting alert queue."""
     agent, project = agent or "Agent", project or ""
+    unresolved[:] = [item for item in unresolved if not (item["agent"] == agent and
+                     item["project"] == project)]
     queue[:] = [item for item in queue if not (item["kind"] == "needs" and
                item["agent"] == agent and item["project"] == project)]
     _recent[:] = [seen for seen in _recent if not (seen[0][0] == agent and
@@ -79,6 +85,7 @@ def next_pending(pending, focused=False):
             "message": "Latest: " + latest, "at": alert["at"]}
 
 def clear():
+    """Dismiss display history; unresolved agent requests remain until a matching done."""
     queue.clear()
 
 def chime(kind):

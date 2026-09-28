@@ -123,10 +123,35 @@ class CompanionStateTests(unittest.TestCase):
         latest["message"] = "changed"
         self.assertEqual("Approve", a.latest_needs()["message"])
         self.assertTrue(a.add("Claude", "Desk", "done", "Complete", "10:02"))
+        a.resolve("Claude", "Desk")
         for n in range(6):
             a.add("Agent", str(n), "done", "Complete", "10:03")
         self.assertEqual(6, len(a.queue))
         self.assertIsNone(a.latest_needs())
+
+    def test_unresolved_needs_survives_timeout_and_manual_display_dismissal(self):
+        a = self.alerts
+        self.assertTrue(a.add("Claude", "Desk", "needs", "Approve", "10:00"))
+        self.assertTrue(a.add("Friend", "Chat", "message", "Hello", "10:01"))
+        a.clear()  # the message screen timed out
+        self.assertEqual([], a.queue)
+        self.assertEqual("Approve", a.latest_needs()["message"])
+        self.assertTrue(a.add("Codex", "Other", "done", "Finished", "10:02"))
+        a.clear()  # the user dismissed the unrelated done screen
+        self.assertEqual("Approve", a.latest_needs()["message"])
+        a.resolve("Claude", "Desk")
+        self.assertIsNone(a.latest_needs())
+
+    def test_unresolved_needs_replaces_same_agent_project_and_is_bounded(self):
+        a = self.alerts
+        a.add("Claude", "Desk", "needs", "First", "10:00")
+        a.add("Claude", "Desk", "needs", "Second", "10:01")
+        self.assertEqual("Second", a.latest_needs()["message"])
+        self.assertEqual(1, len(a.unresolved))
+        for n in range(a.MAX_UNRESOLVED + 2):
+            a.add("Agent", str(n), "needs", "Approve", "10:02")
+        self.assertLessEqual(len(a.unresolved), a.MAX_UNRESOLVED)
+        self.assertEqual(str(a.MAX_UNRESOLVED + 1), a.latest_needs()["project"])
 
     def test_alert_duplicate_is_accepted_again_after_short_window(self):
         a = self.alerts
