@@ -228,10 +228,12 @@ def local_clock():
 
 def handle(method, path, q, body):
     """LAN requests: the remote page, the Mac's agent hooks and the Spotify sign-in hand-off."""
-    # The remote page and its buttons are open to anyone on the home Wi-Fi; only the Mac's agent
-    # alerts and the Spotify token hand-off need the key.
-    if path in ("/agent", "/spotify-token") and q.get("k") != secrets.VOICE_KEY:
+    # The remote page and its buttons are open to anyone on the home Wi-Fi. Mac agent alerts use the
+    # shared key; Spotify token hand-offs use a token-specific signature so the key stays private.
+    if path == "/agent" and q.get("k") != secrets.VOICE_KEY:
         return 401, "text/plain", "wrong or missing key"
+    if path == "/spotify-token" and not music.verify_handoff(q.get("refresh"), q.get("sig")):
+        return 401, "text/plain", "invalid Spotify handoff"
     if path == "/spotify-login":
         return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s&board=%s'>" % (remote.SPOTIFY_LOGIN, wlan.ifconfig()[0])
     if path == "/":

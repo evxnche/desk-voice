@@ -3,7 +3,7 @@
 //   GET  ?action=now&k=KEY        -> now playing        (header X-Spotify-Refresh)
 //   POST ?action=control&do=X&k=  -> play/pause/toggle/next/previous, returns now playing
 //   GET  ?action=art&url=U&k=      -> album cover as a 1-bit 150x150 bitmap (MONO_HLSB, 2812 bytes)
-import { configured, control, nowPlaying, REDIRECT_URI, SCOPES } from '../lib/spotify.js';
+import { configured, control, createSpotifyLoginState, nowPlaying, REDIRECT_URI, SCOPES } from '../lib/spotify.js';
 import { ditheredCover } from '../lib/art.js';
 
 function json(data, status = 200) {
@@ -29,10 +29,11 @@ async function handle(request) {
   const action = url.searchParams.get('action');
 
   if (action === 'login') {
-    // `board` is the board's LAN address; it rides through Spotify as `state` so the callback can hand
-    // the token straight back to it without relying on the deskpal.local name.
+    // Signed state proves the callback began through this authenticated route and carries the board's
+    // LAN address so the callback does not have to rely on the deskpal.local name.
     const board = url.searchParams.get('board') || '';
-    const q = new URLSearchParams({ client_id: process.env.SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: REDIRECT_URI, scope: SCOPES, state: board });
+    const state = createSpotifyLoginState(board);
+    const q = new URLSearchParams({ client_id: process.env.SPOTIFY_CLIENT_ID, response_type: 'code', redirect_uri: REDIRECT_URI, scope: SCOPES, state });
     return Response.redirect(`https://accounts.spotify.com/authorize?${q}`, 302);
   }
 

@@ -1,6 +1,6 @@
 # Spotify now-playing screen. The board keeps its own Spotify refresh token (spotify.json, saved
 # when you sign in from the remote page); desk-voice /api/spotify swaps it for access tokens.
-import json, time, requests, _thread, framebuf
+import json, time, requests, _thread, framebuf, hashlib, binascii
 import dashboard, font5, secrets
 
 API = secrets.VOICE_URL.replace("/api/voice", "/api/spotify") + "?k=" + secrets.VOICE_KEY
@@ -28,6 +28,30 @@ def save_token(token):
     with open(TOKEN_FILE, "w") as f:
         json.dump({"refresh": token}, f)
     _next_poll = time.ticks_ms()
+
+def verify_handoff(token, provided):
+    """Verify the server's Spotify-token handoff without exposing VOICE_KEY in the redirect."""
+    if not token or not provided:
+        return False
+    try:
+        key = secrets.VOICE_KEY.encode()
+        if len(key) > 64:
+            key = hashlib.sha256(key).digest()
+        key += b"\0" * (64 - len(key))
+        inner, outer = bytearray(64), bytearray(64)
+        for i in range(64):
+            inner[i] = key[i] ^ 0x36
+            outer[i] = key[i] ^ 0x5c
+        digest = hashlib.sha256(inner + token.encode()).digest()
+        expected = binascii.hexlify(hashlib.sha256(outer + digest).digest()).decode()
+    except Exception:
+        return False
+    if len(expected) != len(provided):
+        return False
+    different = 0
+    for actual, wanted in zip(expected, provided):
+        different |= ord(actual) ^ ord(wanted)
+    return different == 0
 
 def headers():
     return {"X-Spotify-Refresh": refresh} if refresh else {}
