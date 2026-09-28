@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker
+import pal, companion, tracker, memories
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -225,8 +225,27 @@ def leave_takeover():
 
 def run(cmd):
     """One command from the remote page or the voice assistant."""
+    global active_alert, alert_until
     do = cmd.get("do")
-    if do == "screen" and cmd.get("name") in SCREENS + ("timer",):
+    if do == "memory_add":
+        return memories.add(cmd.get("text"))
+    elif do == "memory_delete":
+        text = str(cmd.get("text") or "").strip().lower()
+        for index, item in enumerate(memories.list_all()):
+            if item.lower() == text:
+                return memories.delete(index)
+        return False
+    elif do == "memory_clear":
+        return memories.clear()
+    elif do == "alert_show":
+        alert = alerts.latest_needs()
+        if not alert:
+            return False
+        active_alert = alert
+        show("alert")
+        alert_until = time.ticks_add(time.ticks_ms(), MESSAGE_MS)
+        return True
+    elif do == "screen" and cmd.get("name") in SCREENS + ("timer",):
         show(cmd["name"])
     elif do == "timer":
         timer.start(float(cmd.get("minutes") or 25), cmd.get("label") or "Focus")
@@ -271,6 +290,18 @@ def handle(method, path, q, body):
         return 200, "text/html", "<meta http-equiv=refresh content='0;url=%s&board=%s'>" % (remote.SPOTIFY_LOGIN, wlan.ifconfig()[0])
     if path == "/":
         return 200, "text/html", remote.page()
+    if path == "/memories" and method == "GET":
+        return 200, "application/json", json.dumps(memories.list_all())
+    if path == "/memories/add" and method == "POST":
+        return 200, "application/json", json.dumps({"ok": run({"do": "memory_add", "text": q.get("text", "")})})
+    if path == "/memories/delete" and method == "POST":
+        try:
+            index = int(q.get("index", ""))
+        except ValueError:
+            index = -1
+        return 200, "application/json", json.dumps({"ok": memories.delete(index)})
+    if path == "/memories/clear" and method == "POST":
+        return 200, "application/json", json.dumps({"ok": run({"do": "memory_clear"})})
     if path == "/location":
         try:
             lat, lon = float(q["lat"]), float(q["lon"])

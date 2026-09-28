@@ -43,6 +43,10 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div class=row><button onclick="claude()">Connect Claude</button><button onclick="codex()">Connect Codex</button></div>
 <div id=login style="margin-top:8px"></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
+<h2>MEMORY</h2><div id=memorylist style="margin-bottom:8px"></div>
+<div class=row><input id=memoryinput maxlength=140 placeholder="A preference to remember">
+<button onclick="addMemory()">Save</button></div>
+<button onclick="clearMemories()" style="width:100%%;margin-top:8px">Forget all memories</button>
 <script>
 const NAMES={pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
 const sc=document.getElementById('screens');
@@ -74,9 +78,22 @@ a.onclick=e=>{e.preventDefault();delWifi(n)};box.append(a)}}catch(e){}}
 async function addWifi(){const s=ssid.value.trim();if(!s)return;
 await fetch('/wifi/add?ssid='+encodeURIComponent(s)+'&password='+encodeURIComponent(pw.value),{method:'POST'});ssid.value=pw.value='';wifi()}
 async function delWifi(s){await fetch('/wifi/remove?ssid='+encodeURIComponent(s),{method:'POST'});wifi()}
+async function refreshMemories(){try{const entries=await(await fetch('/memories')).json();
+const box=document.getElementById('memorylist');box.textContent='';
+if(!entries.length){box.textContent='Nothing saved yet';return}
+entries.forEach((entry,index)=>{const row=document.createElement('div');row.className='row';row.style.marginBottom='8px';
+const value=document.createElement('div');value.textContent=entry;value.style.padding='10px 0';
+const remove=document.createElement('button');remove.textContent='Forget';
+remove.onclick=()=>deleteMemory(index);row.append(value,remove);box.appendChild(row)})
+}catch(e){document.getElementById('memorylist').textContent='Memory unavailable'}}
+async function addMemory(){const value=document.getElementById('memoryinput').value.trim();if(!value)return;
+const result=await step('/memories/add?text='+encodeURIComponent(value));
+if(result.ok)document.getElementById('memoryinput').value='';refreshMemories()}
+async function deleteMemory(index){await step('/memories/delete?index='+index);refreshMemories()}
+async function clearMemories(){await step('/memories/clear');refreshMemories()}
 document.getElementById('locbtn').addEventListener('click',()=>{
 window.location.href='https://desk-voice.vercel.app/api/locate?board='+encodeURIComponent(window.location.host)});
-refresh();wifi();setInterval(refresh,3000);
+refresh();wifi();refreshMemories();setInterval(refresh,3000);
 </script></body></html>"""
 
 def page():

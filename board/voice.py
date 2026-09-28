@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread, socket, ssl, network, binascii
-import adpcm, audio, secrets, flights, music, home, phone, pal, tracker
+import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memories, alerts
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -21,6 +21,9 @@ def _recent():
     now = time.ticks_ms()
     return [[q, a] for at, q, a in history if time.ticks_diff(now, at) < HISTORY_MS]
 
+def _context_header(value):
+    return binascii.b2a_base64(json.dumps(value).encode()).decode().strip()
+
 def _headers(wake, followup=False):
     hdrs = {"X-Audio": "adpcm"}       # ADPCM both ways: a quarter of the bytes of 16-bit PCM
     if wake:
@@ -29,7 +32,28 @@ def _headers(wake, followup=False):
         hdrs["X-Followup"] = "1"      # a reply with no wake phrase: silence or noise is ignored, not answered
     recent = _recent()
     if recent:
-        hdrs["X-History"] = binascii.b2a_base64(json.dumps(recent).encode()).decode().strip()
+        hdrs["X-History"] = _context_header(recent)
+    saved = memories.list_all()
+    if saved:
+        encoded = _context_header(saved)
+        while len(encoded) > 2500 and len(saved) > 1:
+            saved.pop(0)
+            encoded = _context_header(saved)
+        if len(encoded) <= 2500:
+            hdrs["X-Memories"] = encoded
+    alert = alerts.latest_needs()
+    if alert:
+        limited = {"kind": "needs", "agent": str(alert.get("agent", ""))[:80],
+                   "project": str(alert.get("project", ""))[:80],
+                   "message": str(alert.get("message", ""))[:500],
+                   "at": str(alert.get("at", ""))[:16]}
+        encoded = _context_header(limited)
+        for field in ("message", "project", "agent"):
+            while len(encoded) > 1800 and limited[field]:
+                limited[field] = limited[field][:-20]
+                encoded = _context_header(limited)
+        if len(encoded) <= 1800:
+            hdrs["X-Agent-Alert"] = encoded
     hdrs.update(music.headers())      # lets "play something chill" reach Spotify
     hdrs.update(tracker.headers())    # "how's the flight doing?"
     return hdrs
