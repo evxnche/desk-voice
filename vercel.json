@@ -3,6 +3,9 @@
     "api/voice.js": {
       "maxDuration": 60
     },
+    "api/say.js": {
+      "maxDuration": 30
+    },
     "api/flights.js": {
       "maxDuration": 15
     },

@@ -1,60 +1,44 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
-import json, time, requests, _thread, socket, ssl, network
-import adpcm, audio, dashboard, secrets, flights, music, home, phone
+import json, time, requests, _thread, socket, ssl, network, binascii
+import adpcm, audio, secrets, flights, music, home, phone, pal
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
+FOLLOWUP_MS = 6000        # after an answer, how long it listens for a reply without "gee gee"
 
-def wrap(text, width):
-    lines, line = [], ""
-    for word in text.split():
-        if line and len(line) + 1 + len(word) > width:
-            lines.append(line)
-            line = word
-        else:
-            line = (line + " " + word).strip()
-    if line:
-        lines.append(line)
-    return lines
+# Conversation memory: the last few exchanges go with each question so "and tomorrow?" makes sense.
+# Kept in RAM on the board only (a restart clears it) and sent to desk-voice with the question.
+HISTORY_TURNS = 6
+HISTORY_MS = 10 * 60 * 1000
+history = []              # [(ticks_ms, question, answer)], newest last; question "" = it spoke up itself
 
-def screen(title, heard="", reply="", hint="BOOT: back"):
-    d = dashboard.display()
-    d.clear(0)
-    d.text_large("ASK AI", 10, 8, 2)
-    d.line(0, 32, 400, 32, 1)
-    y = 44
-    if heard:
-        for line in wrap("You: " + heard, 48)[:3]:
-            d.text(dashboard.ascii(line), 10, y, 1)
-            y += 11
-        y += 8
-    if reply:
-        big = wrap(reply, 24)
-        if len(big) * 22 <= 286 - y:
-            for line in big:
-                d.text_large(dashboard.ascii(line), 10, y, 2)
-                y += 22
-        else:
-            for line in wrap(reply, 48)[:(286 - y) // 11]:
-                d.text(dashboard.ascii(line), 10, y, 1)
-                y += 11
-    else:
-        d.text_large(title, 10, 120, 3)
-    d.fill_rect(0, 286, 400, 14, 1)
-    d.text(hint, 4, 289, 0)
-    d.show()
+def remember(question, answer):
+    history.append((time.ticks_ms(), question, answer[:400]))
+    del history[:-HISTORY_TURNS]
 
-def _request(data, box, wake):
-    """Worker thread: POST the recording (4-bit ADPCM), fill `box`, set box['done'].
-    `wake` names the wake phrase the recording starts with (the server checks it's really there)."""
+def _recent():
+    now = time.ticks_ms()
+    return [[q, a] for at, q, a in history if time.ticks_diff(now, at) < HISTORY_MS]
+
+def _headers(wake, followup=False):
+    hdrs = {"X-Audio": "adpcm"}       # ADPCM both ways: a quarter of the bytes of 16-bit PCM
+    if wake:
+        hdrs["X-Wake"] = wake         # the recording starts with this phrase; the server checks it's there
+    if followup:
+        hdrs["X-Followup"] = "1"      # a reply with no wake phrase: silence or noise is ignored, not answered
+    recent = _recent()
+    if recent:
+        hdrs["X-History"] = binascii.b2a_base64(json.dumps(recent).encode()).decode().strip()
+    hdrs.update(music.headers())      # lets "play something chill" reach Spotify
+    return hdrs
+
+def _request(data, box, hdrs, url=None):
+    """Worker thread: POST `data` (the recording as 4-bit ADPCM, or text for /api/say), fill `box`,
+    set box['done']."""
     try:
-        # ADPCM both ways: a quarter of the bytes of 16-bit PCM over this board's flaky Wi-Fi
-        hdrs = {"Content-Type": "application/octet-stream", "X-Audio": "adpcm"}
-        if wake:
-            hdrs["X-Wake"] = wake
-        hdrs.update(music.headers())               # lets "play something chill" reach Spotify
-        r = requests.post(URL + flights.params() + home.query(), data=data, timeout=60, headers=hdrs)
+        hdrs = dict(hdrs, **{"Content-Type": "application/octet-stream"})
+        r = requests.post(url or (URL + flights.params() + home.query()), data=data, timeout=60, headers=hdrs)
         box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
         if size:                                  # big reads: r.content crawls at ~13 KB/s
@@ -107,13 +91,9 @@ class _Stream:
     server awake (a cold function takes ~0.6-0.9 s longer) the moment recording starts, then uploads
     the ADPCM as it's recorded (chunked), so when you stop only the last ~0.5 s is left to send.
     Raises OSError if no thread fits; ask() then sends the whole recording afterwards as before."""
-    def __init__(self, wake):
+    def __init__(self, hdrs):
         self.mv, self.n, self.end, self.quit, self.box = None, 0, None, False, {}
         host, path = URL.split("/")[2], "/" + URL.split("/", 3)[3]
-        hdrs = {"X-Audio": "adpcm"}
-        if wake:
-            hdrs["X-Wake"] = wake
-        hdrs.update(music.headers())               # lets "play something chill" reach Spotify
         self.host, self.path = host, path
         self.post = ("POST %s%s%s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/octet-stream\r\n%s"
                      "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n" % (
@@ -208,36 +188,154 @@ def _arriving(box, start):
         else:
             time.sleep_ms(10)
 
-def _start_stream(wake):
+def _start_stream(hdrs):
     if not network.WLAN(network.STA_IF).isconnected():
         return None                               # ask() joins Wi-Fi after recording, as before
     try:
-        return _Stream(wake)
+        return _Stream(hdrs)
     except OSError:                               # no stack fits right now
         return None
 
-def ask(key, boot, connect, run, tick, heard=None):
+class _Face:
+    """The Pal while a question is on: listening (bars follow your voice), thinking, then speaking with
+    its mouth following its own voice. Frames are paced to ~10 a second."""
+    def __init__(self):
+        self.bars, self.next, self.levels, self.caption = [], 0, [], []
+        self.lines, self.page, self.played, self.total, self.huh = [], [], 0, 0, False
+
+    def _due(self, ms=100):
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self.next) < 0:
+            return False
+        self.next = time.ticks_add(now, ms)
+        return True
+
+    def listening(self, mv=None, n=0):
+        if n >= 2048:
+            self.bars.append(min(1.0, audio.mean_level(mv[n - 2048:n]) / 80))
+            del self.bars[:-25]
+        if self._due():
+            pal.draw("listen", self.bars[-1] if self.bars else 0, self.caption, bars=self.bars)
+
+    def thinking(self):
+        if self._due():
+            pal.draw("think")
+
+    def waiting(self, left):
+        if self._due(200):
+            pal.draw("waiting", left)
+
+    def speaking(self, reply, huh, total):
+        """First speaking frame. `total`: bytes of PCM to come (0 if unknown), to page long captions."""
+        self.lines = pal.wrap(reply) if pal.CAPTIONS else []
+        self.huh, self.total, self.played, self.levels = huh, total, 0, []
+        self.page = pal.caption_page(self.lines, 0)
+        pal.draw("huh" if huh else "speak", 0, self.page)
+
+    def voiced(self, chunks):
+        """Pass the reply's PCM through, noting each chunk's loudness for the mouth."""
+        for chunk in chunks:
+            self.levels.append(audio.mean_level(chunk))
+            self.played += len(chunk)
+            yield chunk
+
+    def mouth(self):
+        """Between chunks (~0.13 s of voice each). What you hear now was queued ~4 chunks ago: the
+        speaker buffer holds ~0.5 s."""
+        level = min(1.0, (self.levels[-4] if len(self.levels) >= 4 else 0) / 3000)
+        page = self.page
+        if self.total:
+            page = pal.caption_page(self.lines, max(0, self.played - audio.TX_BUF) / self.total)
+        if page != self.page:
+            self.page = page
+            pal.draw("huh" if self.huh else "speak", level, page)
+        else:
+            pal.speak_update(level, self.huh)
+
+def _chunks(buf):
+    mv = memoryview(buf)
+    for i in range(0, len(mv), 4096):
+        yield mv[i:i + 4096]
+
+def _problem(text, back):
+    """Show what went wrong under a puzzled Pal for a few seconds (BOOT skips)."""
+    pal.draw("huh", caption=pal.wrap(text))
+    end = time.ticks_add(time.ticks_ms(), 5000)
+    while time.ticks_diff(end, time.ticks_ms()) > 0 and not back():
+        time.sleep_ms(50)
+
+def _sound(box, body, nl):
+    """The reply's audio as PCM chunks, and how many PCM bytes there are in all."""
+    if box.get("adpcm") is False:                   # plain PCM (an older server): wait for all of it
+        while "done" not in box:
+            time.sleep_ms(20)
+        return _chunks(memoryview(body)[nl + 1:]), len(body) - nl - 1
+    total = (len(body) - nl - 1) * 4
+    if "got" in box:
+        return _arriving(box, nl + 1), total        # decode and play it as it downloads
+    return _chunks(adpcm.decode(memoryview(body)[nl + 1:])), total   # ~0.1 s for 6 s of speech
+
+def _post(job, box, back, face):
+    """Run _request(*job) on a worker thread (the main thread if no stack fits) while the Pal thinks.
+    False if BOOT was pressed."""
+    try:
+        # TLS needs more than the default stack; 20 KB is plenty (tested on the board), and a task
+        # stack must be one block of internal RAM, which Bluetooth (phone.py) shares.
+        _thread.stack_size(20 * 1024)
+        _thread.start_new_thread(_request, job)
+    except OSError:
+        # No block big enough for the stack ("can't create thread"): ask from this thread instead.
+        # BOOT then only works once the answer is back.
+        _request(*job)
+    while "done" not in box:                     # the worker keeps going if we leave; its result is dropped
+        if back():
+            return False
+        face()
+        time.sleep_ms(20)
+    return True
+
+def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=False):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
-    is given, then show and speak the reply. If the reply comes with board commands (a screen for
-    the weather, flights or music, a timer...) they `run` first, `tick(False)` draws the screen,
-    and the reply is spoken over it with `tick(True)` keeping it up to date.
-    Returns "back" as soon as `boot` is pressed at any stage, else {"board": [commands run]}."""
+    is given, or with `followup`, whatever you say in the FOLLOWUP_MS after an answer (no wake phrase;
+    `keep_screen` leaves the answer's screen up meanwhile). The Pal listens, thinks, then speaks the
+    reply with its words underneath. If the reply comes with board commands (a screen for the weather,
+    flights or music, a timer...) they `run` first, `tick(False)` draws that screen, and the reply is
+    spoken over it with `tick(True)` keeping it up to date.
+    Returns "back" as soon as `boot` is pressed at any stage, "quiet" if no follow-up came, None after
+    a problem or a slip of the KEY, else {"board": [commands run]}."""
     back = lambda: not boot.value()
     wake = audio.WAKE_PHRASES[heard[0]] if heard else ""
+    hdrs = _headers(wake, followup)
+    face = _Face()
+    streams = []                                     # the upload that starts as you start talking
+    def on_audio(mv, n):
+        if streams and streams[0]:
+            streams[0].progress(mv, n)
+        face.listening(mv, n)
     phone.hush(True)                                 # Bluetooth advertising slows Wi-Fi 2-8x
-    stream = _start_stream(wake)
     try:
-        if heard:
-            screen("Listening...", hint="Stop talking to send   BOOT: back")
-            pcm = audio.record_speech(MAX_SECONDS, heard, stop=back, progress=stream and stream.progress)
+        if followup:
+            audio.listen()                           # its ring buffer holds whatever you say next
+            pcm = audio.record_followup(MAX_SECONDS, FOLLOWUP_MS, stop=lambda: back() or not key.value(),
+                                        progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
+                                        waiting=None if keep_screen else face.waiting)
+            if pcm is None:
+                return "back" if back() or not key.value() else "quiet"
         else:
-            pcm = audio.record_while(key, MAX_SECONDS, stop=back, progress=stream and stream.progress,
-                                     on_start=lambda: screen("Listening...", hint="Let go of KEY to send   BOOT: back"))
+            streams.append(_start_stream(hdrs))
+            if heard:
+                face.listening()
+                pcm = audio.record_speech(MAX_SECONDS, heard, stop=back, progress=on_audio)
+            else:
+                face.caption = ["let go of KEY to send"]
+                pcm = audio.record_while(key, MAX_SECONDS, stop=back, progress=on_audio, on_start=face.listening)
+        stream = streams[0] if streams else None
         if pcm is None or back() or len(pcm) < audio.RATE * 2 // 2:   # under half a second: a slip
             if stream:
                 stream.quit = True
             return "back" if pcm is None or back() else None
-        screen("Thinking...")
+        face.next = 0
+        face.thinking()
         box = {}
         if stream:
             stream.end = len(pcm)                    # the worker sends the last piece and waits for the reply
@@ -246,64 +344,85 @@ def ask(key, boot, connect, run, tick, heard=None):
                 if back():
                     stream.quit = True
                     return "back"
+                face.thinking()
                 time.sleep_ms(20)
             if "error" in box:                       # streaming broke: send the whole recording instead
                 box = {}
         if not box:
             if not connect():
-                screen("No Wi-Fi")
-                time.sleep(3)
+                _problem("No Wi-Fi", back)
                 return None
-            job = (adpcm.encode(pcm), box, wake)
-            try:
-                # TLS needs more than the default stack; 20 KB is plenty (tested on the board), and a
-                # task stack must be one block of internal RAM, which Bluetooth (phone.py) shares.
-                _thread.stack_size(20 * 1024)
-                _thread.start_new_thread(_request, job)
-            except OSError:
-                # No block big enough for the stack ("can't create thread"): ask from this thread
-                # instead. BOOT then only works once the answer is back.
-                _request(*job)
-            while "done" not in box:                 # the worker keeps going if we leave; its result is dropped
-                if back():
-                    return "back"
-                time.sleep_ms(20)
+            if not _post((adpcm.encode(pcm), box, hdrs), box, back, face.thinking):
+                return "back"
         if "error" in box:
-            screen("", reply="Couldn't reach the assistant: %s" % box["error"])
+            _problem("Couldn't reach the assistant: %s" % box["error"], back)
             return None
         body = box["body"]
         if box["status"] != 200:
-            screen("", reply="Assistant error %d: %s" % (box["status"], bytes(body[:80]).decode("utf-8", "ignore")))
+            _problem("Assistant error %d: %s" % (box["status"], bytes(body[:80]).decode("utf-8", "ignore")), back)
             return None
         nl = bytes(body[:min(box.get("got", len(body)), 4096)]).find(b"\n")
         meta = json.loads(body[:nl])
         if meta.get("ignored"):                      # a look-alike woke it, or nothing followed the phrase
             if stream:
                 stream.quit = True
-            return "back"
+            return "quiet" if followup else "back"
+        if meta.get("forget"):                       # "forget that"
+            history.clear()
+        reply = meta.get("reply", "")
+        huh = bool(meta.get("huh")) or reply.startswith("Sorry, I didn't catch")
         cmds = meta.get("board") or []
         if meta.get("radar"):
             flights.set_view(meta["radar"])
             cmds.append({"do": "screen", "name": "flights"})   # "show flights near London": go look
         for cmd in cmds:
             run(cmd)
+        box["adpcm"] = meta.get("audio") == "adpcm"
+        sound, total = _sound(box, body, nl)
         if cmds:
             tick(False)
         else:
-            screen("", meta.get("heard", ""), meta.get("reply", ""), hint="BOOT: back   KEY: ask again")
-        if meta.get("audio") != "adpcm":
-            while "done" not in box:                 # plain PCM (an older server): wait for all of it
-                time.sleep_ms(20)
-            sound = memoryview(body)[nl + 1:]
-        elif "got" in box:
-            sound = _arriving(box, nl + 1)           # decode and play it as it downloads
-        else:
-            sound = adpcm.decode(memoryview(body)[nl + 1:])   # ~0.1 s for 6 s of speech
-        if not audio.play(sound, volume=0xBF, mono=True, stop=back,
-                          between=(lambda: tick(True)) if cmds else None):
+            face.speaking(reply, huh, total)
+        if not audio.play(face.voiced(sound), volume=0xBF, mono=True, stop=back,
+                          between=(lambda: tick(True)) if cmds else face.mouth):
             if stream:
                 stream.quit = True
             return "back"
+        if meta.get("heard") and not huh and not meta.get("forget"):
+            remember(meta["heard"], reply)
         return {"board": cmds}
+    finally:
+        phone.hush(False)
+
+SAY_URL = secrets.VOICE_URL.replace("/api/voice", "/api/say") + "?k=" + secrets.VOICE_KEY
+
+def say(text, boot, connect):
+    """Speak up unprompted (companion.py): the Pal hops with a "!" while desk-voice turns `text` into
+    Ara's voice, then says it with the words underneath. False if it couldn't (no Wi-Fi, a server
+    without /api/say) or BOOT stopped it."""
+    back = lambda: not boot.value()
+    lines = pal.wrap(text)[:5]
+    pal.draw("alert", 0, lines)
+    if not connect():
+        return False
+    box = {}
+    face = _Face()
+    phone.hush(True)
+    try:
+        if not _post((text.encode(), box, {"X-Audio": "adpcm"}, SAY_URL), box, back,
+                     lambda: face._due() and pal.draw("alert", 0, lines)):
+            return False
+        if "error" in box or box["status"] != 200:
+            print("say failed:", box.get("error") or box["status"])
+            return False
+        body = box["body"]
+        nl = bytes(body[:4096]).find(b"\n")
+        box["adpcm"] = json.loads(body[:nl]).get("audio") == "adpcm"
+        sound, total = _sound(box, body, nl)
+        face.speaking(text, False, total)
+        if not audio.play(face.voiced(sound), volume=0xBF, mono=True, stop=back, between=face.mouth):
+            return False
+        remember("", text)
+        return True
     finally:
         phone.hush(False)

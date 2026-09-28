@@ -132,6 +132,24 @@ def listen():
     if wake.start():
         _es7210_init()                            # needs BCLK, which wake.start() just started
 
+_level_buf = bytearray(4096)
+
+def level_now():
+    """Mean |sample| of the newest ~0.1 s at the mic while the listener runs (quiet room ~5-10,
+    talking at the desk 20-50), else None. Reads the listener's ring buffer; the audio isn't kept.
+    Mean, not peak: a key tap or a knock peaks as high as a voice."""
+    if not (wake and _wake_ready):
+        return None
+    last = 0
+    while True:
+        n = wake.read(_level_buf)
+        if not n:
+            break
+        last = n
+    if last < 1024:                               # too little new audio to judge (called too soon)
+        return None
+    return _mean_abs(memoryview(_level_buf)[last - 1024:last], 512)
+
 def woke():
     """(phrase index, probability, background level, pre-roll bytes) once the wake phrase is heard."""
     return wake.heard() if wake else None
@@ -259,6 +277,63 @@ def record_speech(max_seconds, heard, stop=None, progress=None):
     finally:
         _pause_listener()                         # free core 0 for Wi-Fi while the reply comes back
     return mv[:n]
+
+def mean_level(mv):
+    """Mean |sample| of 16-bit PCM: ~5-10 for a quiet room at the mic, 20-50 for speech."""
+    return _mean_abs(mv, len(mv) // 2)
+
+def record_followup(max_seconds, wait_ms, stop=None, progress=None, on_start=None, waiting=None):
+    """After an answer: wait up to `wait_ms` for you to start talking (no wake phrase needed), then
+    record until ~0.8 s of quiet. Returns mono PCM from ~0.5 s before you started, or None if nobody
+    spoke (or `stop()` fired). Reads the listener's ring buffer, so listen() must have started it.
+    `on_start()` runs when speech starts, then `progress(mv, n)` hears about each frame;
+    `waiting(fraction of the wait left)` is called while nothing has been said."""
+    frame = 2048                                  # 64 ms
+    buf = bytearray(RATE * 2 * max_seconds + RATE * 2 * wait_ms // 1000 + frame)
+    mv = memoryview(buf)
+    while wake.read(mv[:32768]):                  # skip what the ring holds from before now
+        pass
+    n, start, quiet = 0, None, 0
+    levels, loud = [], 15
+    t0 = time.ticks_ms()
+    try:
+        while n + frame <= len(buf):
+            if stop and stop():
+                return None
+            if start is None:
+                left = 1 - time.ticks_diff(time.ticks_ms(), t0) / wait_ms
+                if left <= 0:
+                    return None
+                if waiting:
+                    waiting(left)
+            got = 0
+            while got < frame:
+                got += wake.read(mv[n + got:n + frame])
+                if got < frame:
+                    time.sleep_ms(20)
+            lv = _mean_abs(mv[n:n + frame], frame // 2)
+            n += frame
+            if start is None:
+                levels.append(lv)
+                if len(levels) > 3:               # the mic's first frames after a restart are near silent
+                    # 3x the room (as after the wake phrase) missed replies: a room at 18 put the bar at
+                    # 54, over half the frames of a reply from across the desk (30-72).
+                    quiet_room = sorted(levels[3:])[(len(levels) - 3) // 10]
+                    loud = max(quiet_room * 3 // 2 + 6, 15)
+                if len(levels) > 6 and sum(1 for v in levels[-4:] if v > loud) >= 3:   # ~0.2 s of speech
+                    start = max(0, n - 11 * frame)
+                    sub = mv[start:]
+                    if on_start:
+                        on_start()
+                continue
+            quiet = 0 if lv > loud else quiet + 1
+            if progress:
+                progress(sub, n - start)
+            if quiet >= 12 or n - start >= RATE * 2 * max_seconds:
+                break
+    finally:
+        _pause_listener()
+    return None if start is None else mv[start:n]
 
 def _background(mv, n, frame, floor):
     """The room's background level: the 10th-percentile frame of the 3 s pre-roll (mv[:n]). The listener's

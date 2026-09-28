@@ -9,6 +9,7 @@ DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 weather = None
+weather_is_home = True                        # False while another place's weather is shown
 _weather_at = None
 version = 0                                     # bumped when new weather arrives, so the screen redraws
 
@@ -18,18 +19,18 @@ def weather_due():
 def set_weather(w, is_home=True):
     """Weather the voice assistant just looked up, shown while it speaks. Somewhere else's weather
     is swapped back for home's a minute later."""
-    global weather, _weather_at, version
-    weather = w
+    global weather, _weather_at, version, weather_is_home
+    weather, weather_is_home = w, is_home
     version += 1
     _weather_at = time.ticks_add(time.ticks_ms(), 0 if is_home else 60000 - WEATHER_MS)
 
 def fetch_weather():
-    global weather, _weather_at, version
+    global weather, _weather_at, version, weather_is_home
     _weather_at = time.ticks_ms()               # also paces retries after a failure
     try:
         r = requests.get(WEATHER_URL + home.query(), timeout=15)
         if r.status_code == 200:
-            weather = r.json()
+            weather, weather_is_home = r.json(), True
             version += 1
         r.close()
     except Exception:

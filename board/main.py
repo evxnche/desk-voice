@@ -1,6 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
+import pal, companion
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -177,13 +178,15 @@ def redraw():
         timer.draw_done()
     if screen == "pixel":
         critter.scene.demo()
+    if screen == "pal":
+        pal.ambient.enter()
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("limits", "room", "pixel", "flights", "music")
+SCREENS = ("pal", "limits", "room", "pixel", "flights", "music")
 # Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
 # BOOT/dismiss returns to.
-home_screen = "limits"
+home_screen = "pal"
 
 def show(name):
     """Switch to a screen (from BOOT, the remote page or a voice command)."""
@@ -276,6 +279,8 @@ def handle(method, path, q, body):
         alerts.add(a.get("agent"), a.get("project"), "needs" if a.get("kind") == "needs" else "done",
                    a.get("message"), local_clock())
         pending_alert.append(alerts.queue[-1]["kind"])
+        if a.get("kind") == "needs":
+            companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
         return 200, "application/json", '{"ok":true}'
     if path == "/spotify-token" and q.get("refresh"):
         music.save_token(q["refresh"])
@@ -336,7 +341,7 @@ def boot_tapped():
     boot_hit = False                     # swallow release bounce
     return True
 
-screen = "limits"
+screen = "pal"
 timer_second = None
 def tick_screen(speaking=False):
     """Keep the current screen up to date; call often. While `speaking` (an answer playing over the
@@ -365,6 +370,8 @@ def tick_screen(speaking=False):
     if screen == "pixel":
         critter.scene.step()
         critter.scene.draw()
+    if screen == "pal":
+        pal.ambient.tick(pal.status_line(last))
 
 next_wifi_try = 0
 web = webserver.Server()
@@ -374,10 +381,12 @@ except Exception as e:
     print("bluetooth failed:", e)
 footer = fetch()
 clock_ok = sync_clock()
-show_limits(footer)
+companion.check_limits(last)
+pal.ambient.on_hear = lambda: companion.heard_you(last)
+redraw()
 next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
-next_heard = None                        # wake phrase heard while an answer was still showing
+weather_seen = room.version
 
 while True:
     web.poll(handle)
@@ -386,7 +395,10 @@ while True:
         m = phone.inbox.pop(0)
         alerts.add(m["title"] or "WhatsApp", m["subtitle"], "message", m["message"], local_clock())
         pending_alert.append("message")
-    if pending_alert:
+    if pending_alert and pending_alert[0] == "needs":
+        pending_alert.pop(0)
+        alerts.chime("needs")                    # the Pal then says who needs you (companion queue)
+    elif pending_alert:
         kind = pending_alert.pop(0)
         if screen != "alert":
             screen = "alert"
@@ -405,13 +417,13 @@ while True:
         timer.chime()
 
     audio.listen()                       # the wake phrase works on every screen
+    pal.ambient.sense()                  # how loud the room is (the Pal perks up; morning hello)
     if screen == "pixel":
         action = pixel_key()
         key_hit = False                  # the game reacts to every press itself
     else:
         action = key_press()
-    heard = next_heard or (audio.woke() if action is None else None)
-    next_heard = None
+    heard = audio.woke() if action is None else None
     if heard:
         action = "hold"                  # same as holding KEY, but it records until you stop talking
     if action == "tap" and screen in ("alert", "timer_done"):
@@ -427,6 +439,11 @@ while True:
         flights.refresh_now()
     elif action == "tap" and screen == "room":
         room.fetch_weather_soon()
+    elif action == "tap" and screen == "pal":
+        footer = fetch()                         # fresh limits on the status line
+        companion.check_limits(last)
+        next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
+        pal.ambient.enter()
     elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
@@ -434,26 +451,23 @@ while True:
         show_limits(footer)
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
+        result, on_screen = None, False
         try:
             result = voice.ask(key, boot, connect, run, tick_screen, heard)
-            if isinstance(result, dict) and result["board"]:
-                result = "handled"               # already on the screen that went with the answer
-            elif result != "back":
-                end = time.ticks_add(time.ticks_ms(), 20000)   # leave the answer up for a bit
-                while time.ticks_diff(end, time.ticks_ms()) > 0 and key.value() and boot.value():
-                    audio.listen()                             # a follow-up "gee gee, ..." works here too
-                    next_heard = audio.woke()
-                    if next_heard:
-                        break
-                    time.sleep_ms(50)
+            while isinstance(result, dict):
+                # Listen a few seconds for a reply, no "gee gee" needed; an answer that opened a
+                # screen (weather, radar, music) stays up meanwhile.
+                on_screen = bool(result["board"])
+                result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=on_screen)
         except Exception as e:
             dashboard.message("Voice failed", str(e))
             time.sleep(5)
+        companion.drop("hello")                  # you're clearly up: no hello after this
         while not boot.value():          # BOOT here means "back", not "next screen"
             time.sleep_ms(10)
         time.sleep_ms(30)
         boot_hit = key_hit = False
-        if result != "handled":
+        if not (on_screen and result == "quiet"):
             redraw()
     elif boot_tapped():
         if screen == "timer":
@@ -473,11 +487,35 @@ while True:
             redraw()
     if time.ticks_diff(time.ticks_ms(), next_fetch) >= 0:
         footer = fetch()
+        companion.check_limits(last)
         if not clock_ok:
             clock_ok = sync_clock()
         if screen == "limits":
             show_limits(footer)
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
+    # Weather for every screen (the Pal's status line, rain warnings), not just "today"; the today
+    # screen fetches its own after drawing, so switching there stays instant.
+    if screen != "room" and room.weather_due() and wlan.isconnected():
+        room.fetch_weather_soon()
+    if room.version != weather_seen:
+        weather_seen = room.version
+        if room.weather_is_home:
+            companion.check_rain(room.weather)
+    if action is None and not heard and screen not in ("alert", "timer_done"):
+        line = companion.next_line(pal.ambient.hearing)
+        if line:
+            said = False
+            try:
+                said = voice.say(line[1], boot, connect)
+            except Exception as e:
+                print("say failed:", e)
+            while not boot.value():
+                time.sleep_ms(10)
+            boot_hit = key_hit = False
+            if not said and line[0] == "needs":  # couldn't say it: show it instead
+                screen = "alert"
+                alert_until = time.ticks_add(time.ticks_ms(), ALERT_MS)
+            redraw()
     try:
         tick_screen()
     except Exception as e:               # one screen's error mustn't stop the whole app

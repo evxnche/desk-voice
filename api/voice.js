@@ -279,8 +279,9 @@ function boardTools(cmds, spotifyRefresh) {
   };
 }
 
-function reply(heard, text, pcm, adpcm, radar = null, board = []) {
-  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(adpcm && { audio: 'adpcm' }), ...(radar && { radar }), ...(board.length && { board }) }) + '\n');
+// `extra`: {huh: true} (didn't catch that: the Pal looks puzzled), {forget: true} (board clears its memory).
+export function reply(heard, text, pcm, adpcm, radar = null, board = [], extra = {}) {
+  const head = Buffer.from(JSON.stringify({ heard, reply: text, ...(adpcm && { audio: 'adpcm' }), ...(radar && { radar }), ...(board.length && { board }), ...extra }) + '\n');
   const audio = adpcm ? encodeAdpcm(pcm) : Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
   const body = Buffer.concat([head, audio]);
   // An explicit length avoids chunked encoding, which MicroPython decodes at ~13 KB/s.
@@ -306,7 +307,7 @@ function ignored(heard) {
 const TTS_MODEL = process.env.TTS_MODEL || 'spacexai/grok-tts';
 const TTS_VOICE = process.env.TTS_VOICE || (TTS_MODEL.startsWith('openai/') ? 'alloy' : 'ara');
 
-async function speak(text) {
+export async function speak(text) {
   const openai = TTS_MODEL.startsWith('openai/');
   const speech = await generateSpeech({
     model: gateway.speechModel(TTS_MODEL),
@@ -345,6 +346,27 @@ const WEATHERY = /\b(weather|temperature|forecast|rain(ing|y)?|sunny|snow(ing|y)
 
 // grok-stt: 0.53-0.86 s on 11 test questions (median 0.62 s) vs 0.66-1.0 s for gpt-4o-mini-transcribe,
 // whose free-tier quota also stalled it for 6-53 s under load. STT_MODEL in the Vercel env overrides it.
+// The board's memory of this conversation: X-History is base64 JSON [[question, answer], ...], oldest
+// first, from the last 10 minutes. An empty question means the gadget spoke up on its own.
+function historyFrom(request) {
+  try {
+    const raw = request.headers.get('x-history');
+    if (!raw) return [];
+    return JSON.parse(Buffer.from(raw, 'base64').toString('utf8')).slice(-6).flatMap(([q, a]) => [
+      { role: 'user', content: q ? String(q) : '(Nothing. You spoke up on your own.)' },
+      { role: 'assistant', content: String(a) },
+    ]);
+  } catch {
+    return [];
+  }
+}
+
+const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
+
+// A reply after an answer comes with no wake phrase, so noise, a cough or a "thanks" may be all it
+// is: stay quiet for those instead of answering.
+const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|ok(ay)?|cool|great|bye|you|mm+|hmm+|uh+|um+)\W*$/i;
+
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
 const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
   'with its wake word "GG" (said "gee gee").';
@@ -399,6 +421,14 @@ export async function POST(request) {
   // "agent"), so only answer when the transcript really has the phrase, and answer what comes
   // after it.
   const wake = (request.headers.get('x-wake') || '').trim().toLowerCase();
+  const followup = request.headers.get('x-followup') === '1';
+  if (followup) {
+    // No wake phrase needed, but say one anyway ("gee gee, and tomorrow?") and it's dropped.
+    const at = new RegExp(`^\\W*(?:${WAKE_SPELLINGS['gee gee']})\\b[\\s,.!?:;-]*`, 'i').exec(heard);
+    if (at) heard = heard.slice(at[0].length);
+    console.log('followup | transcript:', transcript);
+    if (!heard.trim() || NOT_A_REPLY.test(heard)) return ignored(heard);
+  }
   if (wake) {
     const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const at = new RegExp(`\\b(?:${words})(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
@@ -408,8 +438,13 @@ export async function POST(request) {
   }
   if (!heard.trim()) {
     const text = "Sorry, I didn't catch that.";
-    return reply('', text, await speak(text), adpcm);
+    return reply('', text, await speak(text), adpcm, null, [], { huh: true });
   }
+  if (FORGET.test(heard) && heard.split(/\s+/).length <= 8) {
+    const text = "Okay, I've forgotten our conversation.";
+    return reply(heard, text, await speak(text), adpcm, null, [], { forget: true });
+  }
+  const history = historyFrom(request);
 
   const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
   const view = {
@@ -434,8 +469,10 @@ export async function POST(request) {
       system:
         'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
         'Your reply is spoken aloud and shown on a tiny screen, so answer in one or two short sentences of plain speech: ' +
-        'no markdown, lists, emoji or URLs. This is a one-shot voice gadget: never ask the owner a follow-up or ' +
-        'clarifying question, just give your best answer. Never say you are unaware of an event without searching first. ' +
+        'no markdown, lists, emoji or URLs. Earlier messages are your conversation from the last few minutes: use them ' +
+        'to understand follow-ups like "and tomorrow?" or "what about Paris?". The owner can reply for a few seconds ' +
+        'after you speak, but never ask a clarifying question, just give your best answer. ' +
+        'Never say you are unaware of an event without searching first. ' +
         (weatherNow
           ? `Weather at the owner's location (${view.home.place || 'home'}) right now: ${JSON.stringify(weatherNow)}. ` +
             'Answer questions about their weather from that; call get_weather only for somewhere else. '
@@ -452,7 +489,7 @@ export async function POST(request) {
         "short sentence; don't list the flights unless asked. " +
         `It is ${now} in London.` +
         (limits ? ` The owner's AI coding agent usage limits right now: ${limits}.` : ''),
-      prompt: heard,
+      messages: [...history, { role: 'user', content: heard }],
       tools: {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes, heard),
