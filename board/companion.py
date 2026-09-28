@@ -1,6 +1,7 @@
 # Speaking up on its own: Claude or Codex needs you, an AI limit passes 90%, rain within the hour,
 # and a morning hello the first time it hears you after 07:00. Silent in quiet hours (22:00-08:00,
-# pal.quiet_hours) and at most one unprompted line every 10 minutes; "needs you" always gets through.
+# pal.quiet_hours) and at most one unprompted line every 10 minutes; "needs you" always gets through,
+# and a tracked flight's take-off/landing skips the 10-minute gap.
 # main.py queues lines here and voice.say() speaks them when the board is free.
 import time
 import pal, room
@@ -30,6 +31,10 @@ def _spoken(name):
 
 def needs_you(agent, project):
     _add("needs", "%s needs you%s." % (agent or "Your agent", " in " + _spoken(project) if project else ""), first=True)
+
+def flight_news(text):
+    """The tracked flight took off, started coming down or landed (tracker.py)."""
+    _add("flight", text)
 
 def check_limits(data):
     """After each limits fetch. The first call only notes what's already over, so a restart doesn't
@@ -92,8 +97,8 @@ def next_line(hearing):
                 return None
             if kind != "hello" and pal.quiet_hours():           # the hello only comes when you're up
                 continue
-            if _last_said is not None and time.ticks_diff(now, _last_said) < GAP_MS:
-                return None
+            if kind != "flight" and _last_said is not None and time.ticks_diff(now, _last_said) < GAP_MS:
+                return None                                     # (flight news you're waiting for: no gap)
             _last_said = now
         queue.remove(item)
         return kind, text

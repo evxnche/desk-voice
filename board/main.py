@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion
+import pal, companion, tracker
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -198,10 +198,16 @@ def redraw():
         critter.scene.demo()
     if screen == "pal":
         pal.ambient.enter()
+    if screen == "track":
+        tracker.enter()
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("pal", "limits", "room", "pixel", "flights", "music")
+SCREENS = ("pal", "limits", "room", "pixel", "flights", "music", "track")
+
+def cycle():
+    """The screens BOOT steps through: the flight tracker only while it follows a flight."""
+    return SCREENS if tracker.flight else SCREENS[:-1]
 # Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
 # BOOT/dismiss returns to.
 home_screen = "pal"
@@ -236,6 +242,12 @@ def run(cmd):
     elif do == "music":
         music.control(cmd.get("what") or "toggle")
         show("music")
+    elif do == "track":                    # follow a flight ("" stops)
+        tracker.start(cmd.get("flight") or "")
+        if tracker.flight:
+            show("track")
+        elif screen == "track":
+            show("pal")
     elif do == "weather":                  # what the voice assistant just looked up
         room.set_weather(cmd["data"], cmd.get("home", True))
     elif do == "alerts_clear":
@@ -289,7 +301,7 @@ def handle(method, path, q, body):
         return 200, "application/json", json.dumps({
             "screen": screen, "timer": timer.status(), "music": music.status(),
             "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
-            "limits": usage.connected()})
+            "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight})
     if path.startswith("/connect/"):
         return 200, "application/json", json.dumps(connect_agent(path, q))
     if path == "/agent":
@@ -307,7 +319,8 @@ def handle(method, path, q, body):
     routes = {"/screen": {"do": "screen", "name": q.get("name")},
               "/timer": {"do": "timer", "minutes": q.get("minutes"), "label": q.get("label")},
               "/timer/pause": {"do": "timer_pause"}, "/timer/cancel": {"do": "timer_cancel"},
-              "/music": {"do": "music", "what": q.get("do")}, "/alerts/clear": {"do": "alerts_clear"}}
+              "/music": {"do": "music", "what": q.get("do")}, "/alerts/clear": {"do": "alerts_clear"},
+              "/track": {"do": "track", "flight": q.get("f", "")}}
     if path in routes:
         run(routes[path])
         return 200, "application/json", '{"ok":true}'
@@ -390,6 +403,8 @@ def tick_screen(speaking=False):
         critter.scene.draw()
     if screen == "pal":
         pal.ambient.tick(pal.status_line(last))
+    if screen == "track":
+        tracker.frame()
 
 next_wifi_try = 0
 web = webserver.Server()
@@ -401,6 +416,7 @@ footer = fetch()
 clock_ok = sync_clock()
 companion.check_limits(last)
 pal.ambient.on_hear = lambda: companion.heard_you(last)
+tracker.on_news = companion.flight_news
 redraw()
 next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
@@ -455,6 +471,8 @@ while True:
         music.control("toggle")
     elif action == "tap" and screen == "flights":
         flights.refresh_now()
+    elif action == "tap" and screen == "track":
+        tracker.refresh_now()
     elif action == "tap" and screen == "room":
         room.fetch_weather_soon()
     elif action == "tap" and screen == "pal":
@@ -491,7 +509,8 @@ while True:
                 alerts.clear()
             leave_takeover()
         else:
-            show(SCREENS[(SCREENS.index(screen) + 1) % len(SCREENS)])
+            order = cycle()
+            show(order[(order.index(screen) + 1) % len(order)] if screen in order else order[0])
     if not wlan.isconnected() and time.ticks_diff(time.ticks_ms(), next_wifi_try) >= 0:
         # Offline (left home, router restart...): try the known networks every 30 s, then put the
         # current screen back since connect() draws "joining wi-fi".
@@ -508,6 +527,7 @@ while True:
         next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     # Weather for every screen (the Pal's status line, rain warnings), not just "today"; the today
     # screen fetches its own after drawing, so switching there stays instant.
+    tracker.tick(connect, screen == "track")     # also off-screen: take-off / landing lines
     if screen != "room" and room.weather_due() and wlan.isconnected():
         room.fetch_weather_soon()
     if room.version != weather_seen:

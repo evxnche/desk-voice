@@ -20,6 +20,12 @@
     },
     "api/locate.js": {
       "maxDuration": 15
+    },
+    "api/track.js": {
+      "maxDuration": 15
+    },
+    "api/trackmap.js": {
+      "maxDuration": 15
     }
   }
 }

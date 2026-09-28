@@ -20,3 +20,15 @@ def draw(d, right, y):
     d.rect(ix, y + 1, 30, 14, 1)
     d.fill_rect(ix + 30, y + 5, 3, 6, 1)
     d.fill_rect(ix + 2, y + 3, 26 * pct // 100, 10, 1)
+
+def draw_small(d, right, y):
+    """Small battery icon + percentage in the small font, right-aligned to x=`right`, ~9 px tall."""
+    import font5
+    pct = percent()
+    label = "%d%%" % pct
+    x = right - 6 * len(label)
+    font5.text(d.canvas, label, x, y)
+    ix = x - 22
+    d.rect(ix, y - 1, 17, 9, 1)
+    d.fill_rect(ix + 17, y + 1, 2, 5, 1)
+    d.fill_rect(ix + 2, y + 1, 13 * pct // 100, 5, 1)

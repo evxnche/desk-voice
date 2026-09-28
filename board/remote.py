@@ -20,6 +20,10 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 </style></head><body>
 <h1>DESK PAL</h1><div id=st>connecting...</div>
 <h2>SCREEN</h2><div class=grid id=screens></div>
+<h2>TRACK A FLIGHT</h2><div id=trk style="margin-bottom:8px;opacity:.8">...</div>
+<div class=row><input id=fno placeholder="flight number, e.g. BA36" autocapitalize=characters autocorrect=off>
+<button onclick="go('/track?f='+encodeURIComponent(fno.value.trim()))">Track</button></div>
+<button onclick="go('/track?f=')" style="width:100%%;margin-top:8px">Stop tracking</button>
 <h2>FOCUS TIMER</h2><div class=grid>
 <button onclick="go('/timer?minutes=25')">25 min</button><button onclick="go('/timer?minutes=50')">50 min</button>
 <button onclick="go('/timer?minutes=5&label=Break')">5 min break</button></div>
@@ -40,13 +44,14 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div id=login style="margin-top:8px"></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
 <script>
-const NAMES={pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music'};
+const NAMES={pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
 const sc=document.getElementById('screens');
 for(const n in NAMES){const b=document.createElement('button');b.textContent=NAMES[n];b.id='s-'+n;b.onclick=()=>go('/screen?name='+n);sc.appendChild(b)}
 async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
 async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
-st.textContent=[s.alert,s.timer,s.music].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen);
+st.textContent=[s.alert,s.timer,s.music,s.track].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen);
+trk.textContent=s.flight?'Following '+s.track:'Not following a flight';document.getElementById('s-track').style.display=s.flight?'':'none';
 lim.textContent=s.limits.length?'Read directly from: '+s.limits.join(', '):'Not signed in: reading the relay'}catch(e){st.textContent='board not reachable'}}
 async function step(p){try{return await(await fetch(p,{method:'POST'})).json()}catch(e){return{error:'board not reachable'}}}
 function done(r,who){login.textContent=r.ok?who+' connected. Limits update in a few seconds.':r.error;refresh()}
