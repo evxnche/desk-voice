@@ -200,6 +200,8 @@ def redraw():
         pal.ambient.enter()
     if screen == "track":
         tracker.enter()
+    if screen == "room":
+        room.enter()
     if screen == "limits":
         show_limits(footer)
 
@@ -382,12 +384,9 @@ def tick_screen(speaking=False):
     if speaking and screen != "flights":
         return
     if screen == "room":
-        lt = room.local_time()
-        minute = (lt[4] if lt else -1, room.version)   # redraw each minute and when new weather lands
-        if minute != shown_minute:
-            room.draw()
-            shown_minute = minute
-        elif room.weather_due() and connect():   # after drawing, so switching here shows at once
+        drawn = room._static is not None
+        room.frame()                             # new minute / weather, and the weather animation
+        if drawn and room.weather_due() and connect():   # after drawing, so switching here shows at once
             room.fetch_weather_soon()
     if screen == "flights":
         flights.tick(connect)
