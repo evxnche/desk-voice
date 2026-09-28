@@ -301,8 +301,10 @@ function ignored(heard) {
 }
 
 // Grok's voice is ready ~0.5 s sooner than tts-1 for short answers (0.5-1.1 s vs 1.1-1.8 s, 2026-09-27).
-// TTS_MODEL=openai/tts-1 in the Vercel env brings back the old voice.
+// Evan picked Ara. TTS_MODEL / TTS_VOICE in the Vercel env override them (openai/tts-1 voices: alloy,
+// ash, coral, echo, fable, nova, onyx, sage, shimmer; Grok: ara, eve, leo, rex, sal, una).
 const TTS_MODEL = process.env.TTS_MODEL || 'spacexai/grok-tts';
+const TTS_VOICE = process.env.TTS_VOICE || (TTS_MODEL.startsWith('openai/') ? 'alloy' : 'ara');
 
 async function speak(text) {
   const openai = TTS_MODEL.startsWith('openai/');
@@ -310,7 +312,8 @@ async function speak(text) {
     model: gateway.speechModel(TTS_MODEL),
     text,
     // Grok is slower asked for WAV; its raw PCM is 24 kHz 16-bit mono.
-    ...(openai ? { voice: 'alloy', outputFormat: 'wav' } : { outputFormat: 'pcm' }),
+    voice: TTS_VOICE,
+    ...(openai ? { outputFormat: 'wav' } : { outputFormat: 'pcm' }),
   });
   const audio = Buffer.from(speech.audio.uint8Array);
   const { rate, samples } = openai ? parseWav(audio)
@@ -336,7 +339,25 @@ const MOVE_RADAR = /\b(radar|zoom(ed)?|(flights?|planes?|aircrafts?) (near|aroun
 
 // Answers about these open the matching screen, which stays up while the answer is spoken.
 const FLIGHTY = /\b(flights?|planes?|aircrafts?|airplanes?|jets?|radar)\b/i;
+const sleep = (ms) => new Promise((resolve) => setTimeout(() => resolve(null), ms));
+
 const WEATHERY = /\b(weather|temperature|forecast|rain(ing|y)?|sunny|snow(ing|y)?|windy|umbrella)\b/i;
+
+// grok-stt: 0.53-0.86 s on 11 test questions (median 0.62 s) vs 0.66-1.0 s for gpt-4o-mini-transcribe,
+// whose free-tier quota also stalled it for 6-53 s under load. STT_MODEL in the Vercel env overrides it.
+const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
+const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
+  'with its wake word "GG" (said "gee gee").';
+
+// The board calls this the moment you start talking, so a function that had gone cold (~0.6-0.9 s to
+// start) is warm by the time the question arrives.
+export function GET(request) {
+  const url = new URL(request.url);
+  if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) {
+    return new Response('unauthorized', { status: 401 });
+  }
+  return new Response(null, { status: 204 });
+}
 
 export async function POST(request) {
   const url = new URL(request.url);
@@ -354,11 +375,20 @@ export async function POST(request) {
   }
   const pcm = normalize(samples);
 
+  const centre = centreFrom(url, request.headers);
+  const homeUrl = new URL('http://x/');
+  for (const k of ['home_lat', 'home_lon', 'home_place']) if (url.searchParams.has(k)) homeUrl.searchParams.set(k, url.searchParams.get(k));
+  const ipHome = centreFrom(homeUrl, request.headers); // phone location saved on the board, else IP
+  // Home weather, fetched while the audio is transcribed: a weather question then takes one model call
+  // instead of a get_weather round trip (chat took ~2.2 s with the tool call).
+  const homeWeather = getWeather(ipHome.lat, ipHome.lon).catch(() => null);
+
   const [{ text: transcript }, limits] = await Promise.all([
     // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
-    // English only: left to guess, it heard "show me aircraft over Bournemouth" as Czech.
-    transcribe({ model: gateway.transcriptionModel('openai/gpt-4o-mini-transcribe'), audio: toWav(pcm, RATE),
-                 providerOptions: { openai: { language: 'en' } } })
+    // (OpenAI options, for STT_MODEL=openai/...) English only: left to guess, gpt-4o-mini-transcribe heard
+    // "show me aircraft over Bournemouth" as Czech, and with only the language hint once wrote Urdu script.
+    transcribe({ model: gateway.transcriptionModel(STT_MODEL), audio: toWav(pcm, RATE),
+                 providerOptions: { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT } } })
       .catch(() => ({ text: '' })),
     limitsSummary(),
   ]);
@@ -382,16 +412,17 @@ export async function POST(request) {
   }
 
   const now = new Date().toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
-  const centre = centreFrom(url, request.headers);
-  const homeUrl = new URL('http://x/');
-  for (const k of ['home_lat', 'home_lon', 'home_place']) if (url.searchParams.has(k)) homeUrl.searchParams.set(k, url.searchParams.get(k));
-  const ipHome = centreFrom(homeUrl, request.headers); // phone location saved on the board, else IP
   const view = {
     lat: centre.lat, lon: centre.lon, place: centre.place,
     radius: clampRadius(url.searchParams.get('r')),
     home: { lat: ipHome.lat, lon: ipHome.lon, place: ipHome.place },
   };
   const changes = {};
+  const weatherNow = WEATHERY.test(heard) ? await Promise.race([homeWeather, sleep(1500)]) : null;
+  if (weatherNow) {
+    // What the get_weather tool would have shown on the board's today screen.
+    changes.weather = { data: { place: view.home.place || 'home', ...weatherNow }, home: true };
+  }
   const cmds = [];
   const spotifyRefresh = request.headers.get('x-spotify-refresh') || '';
   let text;
@@ -405,7 +436,11 @@ export async function POST(request) {
         'Your reply is spoken aloud and shown on a tiny screen, so answer in one or two short sentences of plain speech: ' +
         'no markdown, lists, emoji or URLs. This is a one-shot voice gadget: never ask the owner a follow-up or ' +
         'clarifying question, just give your best answer. Never say you are unaware of an event without searching first. ' +
-        'Use get_weather for any weather question. Use metric units: km, km/h and Celsius (plane altitudes stay in feet). ' +
+        (weatherNow
+          ? `Weather at the owner's location (${view.home.place || 'home'}) right now: ${JSON.stringify(weatherNow)}. ` +
+            'Answer questions about their weather from that; call get_weather only for somewhere else. '
+          : 'Use get_weather for any weather question. ') +
+        'Use metric units: km, km/h and Celsius (plane altitudes stay in feet). ' +
       'Use web_search for news, current events, prices, sports, or anything else that may have changed recently; ' +
         'otherwise answer from what you know. ' +
         'The gadget also has a flight radar screen, currently centred on ' +

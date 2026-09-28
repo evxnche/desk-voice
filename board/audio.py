@@ -139,7 +139,8 @@ def woke():
 TX_BUF = 16000
 
 def play(buf, volume=0xD0, mono=False, stop=None, between=None):
-    """Play 16-bit PCM. `stop()` is polled between chunks; returns False if it cut playback short.
+    """Play 16-bit PCM: a buffer, or an iterable of chunks (a reply still downloading, voice.py).
+    `stop()` is polled between chunks; returns False if it cut playback short.
     `between()` (keeping a screen up to date) runs after each 4 KB chunk, followed by a short
     sleep so other threads (screen fetches) run too: a write that waits for room in the output
     buffer holds them up. The buffer holds 0.5 s of mono, so between() may take up to ~0.3 s."""
@@ -148,12 +149,14 @@ def play(buf, volume=0xD0, mono=False, stop=None, between=None):
     pa(1)
     finished = True
     try:
-        mv = memoryview(buf)
-        for i in range(0, len(buf), 4096):
+        if isinstance(buf, (bytes, bytearray, memoryview)):
+            mv = memoryview(buf)
+            buf = (mv[i:i + 4096] for i in range(0, len(mv), 4096))
+        for chunk in buf:
             if stop and stop():
                 finished = False
                 break
-            out.write(mv[i:i + 4096])
+            out.write(chunk)
             if between:
                 between()
                 time.sleep_ms(50)
@@ -179,8 +182,9 @@ def record(seconds):
         mic.deinit()
     return buf
 
-def record_while(pin, max_seconds, on_start=None, stop=None):
-    """Record mono while `pin` reads 0 (button held); return the bytes captured, or None if `stop()` fired."""
+def record_while(pin, max_seconds, on_start=None, stop=None, progress=None):
+    """Record mono while `pin` reads 0 (button held); return the bytes captured, or None if `stop()` fired.
+    `progress(mv, n)` hears about each new block (voice.py uploads it as it's recorded)."""
     buf = bytearray(RATE * 2 * max_seconds)
     mv = memoryview(buf)
     mic = _i2s(I2S.RX, DIN, I2S.MONO)
@@ -196,6 +200,8 @@ def record_while(pin, max_seconds, on_start=None, stop=None):
             if stop and stop():
                 return None
             n += mic.readinto(mv[n:n + 2048])
+            if progress:
+                progress(mv, n)
     finally:
         mic.deinit()
     return mv[:n]
@@ -210,11 +216,13 @@ def _mean_abs(buf: ptr16, n: int) -> int:
         total += v
     return total // n if n else 0
 
-def record_speech(max_seconds, heard, stop=None):
+def record_speech(max_seconds, heard, stop=None, progress=None):
     """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
     recognised, which holds the phrase and maybe the whole question ("gee gee, what's the weather"),
-    until ~0.8 s of quiet follows new speech, or 4 s pass with none. Speech = louder than 3x the
-    room's background level. Returns mono PCM, or None if `stop()` fired."""
+    until ~0.8 s of quiet follows speech, or 4 s pass with none. Speech = louder than 3x the room's
+    background level (and than 15: in a quiet room speech measured only 20-50, so the old floor of 40
+    cut questions short or waited out the 4 s). Returns mono PCM, or None if `stop()` fired.
+    `progress(mv, n)` hears about each new frame (voice.py uploads it as it's recorded)."""
     floor, preroll = heard[2], heard[3]
     buf = bytearray(RATE * 2 * max_seconds)
     mv = memoryview(buf)
@@ -234,12 +242,18 @@ def record_speech(max_seconds, heard, stop=None):
                     time.sleep_ms(20)
             if n >= preroll:                      # only speech after the phrase decides when to stop
                 if loud is None:
-                    loud = max(3 * _background(mv, n, frame, floor), 40)
+                    loud = max(3 * _background(mv, n, frame, floor), 15)
+                    # Still talking when the phrase was recognised (MultiNet reports it ~2 s in, often
+                    # mid-question)? Then that counts as speech, and it stops ~0.8 s after you do.
+                    spoke = any(_mean_abs(mv[i:i + frame], frame // 2) > loud
+                                for i in range(max(0, n - 6 * frame), n, frame))
                 if _mean_abs(mv[n:n + frame], frame // 2) > loud:
                     spoke, quiet = True, 0
                 else:
                     quiet += 1
             n += frame
+            if progress:
+                progress(mv, n)
             if quiet >= (12 if spoke else 62):    # 0.8 s after speech, or 4 s of none
                 break
     finally:

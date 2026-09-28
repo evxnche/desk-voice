@@ -1,6 +1,7 @@
 # 4-bit IMA ADPCM for the voice assistant's audio (lib/adpcm.js is the server's copy): a quarter
 # of the bytes of 16-bit PCM, so recordings upload and replies download ~4x faster over this
 # board's flaky Wi-Fi. Two samples per byte, low nibble first; both ends start from pred 0, index 0.
+# Encoder() carries the state from one piece to the next, so a recording can be sent as it's made.
 import array, micropython
 
 _STEPS = array.array("H", (
@@ -11,10 +12,10 @@ _STEPS = array.array("H", (
     9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767))
 
 @micropython.viper
-def _encode(src: ptr16, n: int, dst: ptr8):
+def _encode(src: ptr16, n: int, dst: ptr8, st: ptr32):
     steps = ptr16(_STEPS)
-    pred = 0
-    index = 0
+    pred = int(st[0])
+    index = int(st[1])
     for i in range(n):
         v = int(src[i])
         if v >= 32768:
@@ -57,12 +58,14 @@ def _encode(src: ptr16, n: int, dst: ptr8):
             dst[i >> 1] = dst[i >> 1] | (code << 4)
         else:
             dst[i >> 1] = code
+    st[0] = pred
+    st[1] = index
 
 @micropython.viper
-def _decode(src: ptr8, n: int, dst: ptr16):
+def _decode(src: ptr8, n: int, dst: ptr16, st: ptr32):
     steps = ptr16(_STEPS)
-    pred = 0
-    index = 0
+    pred = int(st[0])
+    index = int(st[1])
     for i in range(n):
         code = int(src[i >> 1])
         if i & 1:
@@ -93,17 +96,36 @@ def _decode(src: ptr8, n: int, dst: ptr16):
         elif index > 88:
             index = 88
         dst[i] = pred & 0xFFFF
+    st[0] = pred
+    st[1] = index
+
+class Encoder:
+    """Encodes a stream piece by piece. Give it an even number of samples each time (whole bytes out)
+    except maybe the last piece."""
+    def __init__(self):
+        self._st = array.array("i", (0, 0))       # pred, index
+
+    def encode(self, pcm):
+        n = len(pcm) // 2
+        out = bytearray((n + 1) // 2)
+        _encode(pcm, n, out, self._st)
+        return out
 
 def encode(pcm):
     """16-bit mono PCM (bytes-like) -> ADPCM bytearray, a quarter the size."""
-    n = len(pcm) // 2
-    out = bytearray((n + 1) // 2)
-    _encode(pcm, n, out)
-    return out
+    return Encoder().encode(pcm)
+
+class Decoder:
+    """Decodes a stream piece by piece (a reply as it downloads)."""
+    def __init__(self):
+        self._st = array.array("i", (0, 0))       # pred, index
+
+    def decode(self, data):
+        n = len(data) * 2
+        out = bytearray(n * 2)
+        _decode(data, n, out, self._st)
+        return out
 
 def decode(data):
     """ADPCM (bytes-like) -> 16-bit mono PCM bytearray, four times the size."""
-    n = len(data) * 2
-    out = bytearray(n * 2)
-    _decode(data, n, out)
-    return out
+    return Decoder().decode(data)
