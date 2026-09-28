@@ -267,6 +267,25 @@ class CompanionStateTests(unittest.TestCase):
         self.assertIsNone(c.next_line(lambda _: False, focused=True))
         self.assertEqual(("flight", "Flight landed"), c.next_line(lambda _: False))
 
+    def test_meeting_warning_passes_focus_but_respects_hearing_and_quiet_hours(self):
+        c = self.companion
+        sys.modules["schedule"].next_after = lambda minute: {"s": 10 * 60, "t": "Planning"}
+        c.check_time((2026, 9, 28, 9, 51, 0, 0), True, lambda _: False)
+        self.assertIsNone(c.next_line(lambda _: True, focused=True))
+        sys.modules["pal"].quiet_hours = lambda: True
+        self.assertIsNone(c.next_line(lambda _: False, focused=True))
+        sys.modules["pal"].quiet_hours = lambda: False
+        self.assertEqual(("meeting", "Heads up: Planning starts in 9 minutes."),
+                         c.next_line(lambda _: False, focused=True))
+
+    def test_meeting_warning_expires_when_meeting_starts(self):
+        c = self.companion
+        sys.modules["schedule"].next_after = lambda minute: {"s": 10 * 60, "t": "Planning"}
+        c.check_time((2026, 9, 28, 9, 59, 45, 0), True, lambda _: False)
+        self.now += 15 * 1000
+        self.assertIsNone(c.next_line(lambda _: False, focused=True))
+        self.assertEqual([], c.queue)
+
     def test_all_lines_expire_and_queue_is_bounded(self):
         c = self.companion
         for n in range(20):

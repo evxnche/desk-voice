@@ -22,7 +22,7 @@ HEADS_UP_MIN = 10             # warn this many minutes before a meeting
 ASKS = ("focus",)             # questions: main.py listens for your answer after saying one
 NO_GAP = ("flight", "meeting", "focus")   # time-sensitive: no waiting for the gap, and they don't start one
 
-queue = []                    # [{kind, text, at, key, urgent}]
+queue = []                    # [{kind, text, at, key, urgent, interrupt_focus, ttl_ms}]
 _last_said = None
 _limit_warned = None          # windows already warned about ("Claude 5-hr"), until they drop below LIMIT_PCT
 _rain_warned = False
@@ -30,15 +30,16 @@ _hello_day = None
 _focus_day = None
 _warned = set()               # meetings already warned about: (day, start, title)
 
-def _add(kind, text, first=False, key=None, urgent=False):
+def _add(kind, text, first=False, key=None, urgent=False, interrupt_focus=False, ttl_ms=STALE_MS):
     now = time.ticks_ms()
-    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < STALE_MS]
+    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < q["ttl_ms"]]
     key = key or kind
     if kind == "needs" and any(q["key"] == key for q in queue):
         return False
     if kind != "needs":
         queue[:] = [q for q in queue if q["kind"] != kind]
-    item = {"kind": kind, "text": text, "at": now, "key": key, "urgent": urgent}
+    item = {"kind": kind, "text": text, "at": now, "key": key, "urgent": urgent,
+            "interrupt_focus": interrupt_focus, "ttl_ms": ttl_ms}
     if first:
         queue.insert(0, item)
     else:
@@ -78,7 +79,9 @@ def check_time(lt, timer_on, around):
         if key not in _warned:
             _warned.add(key)
             left = nxt["s"] - minute
-            _add("meeting", "Heads up: %s starts in %d minute%s." % (nxt["t"], left, "" if left == 1 else "s"))
+            seconds_left = max(0, left * 60 - (lt[5] if len(lt) > 5 else 0))
+            _add("meeting", "Heads up: %s starts in %d minute%s." % (nxt["t"], left, "" if left == 1 else "s"),
+                 interrupt_focus=True, ttl_ms=seconds_left * 1000)
     start = DEEP_WORK_AT[0] * 60 + DEEP_WORK_AT[1]
     if lt[6] >= 5 or _focus_day == lt[2] or not start <= minute < start + DEEP_WORK_WINDOW:
         return
@@ -148,10 +151,10 @@ def next_line(hearing, focused=False):
     """(kind, text) to say now, or None. `hearing(ms)`: someone talked in the last ms."""
     global _last_said
     now = time.ticks_ms()
-    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < STALE_MS]
+    queue[:] = [q for q in queue if time.ticks_diff(now, q["at"]) < q["ttl_ms"]]
     for item in queue:
         kind, text = item["kind"], item["text"]
-        if focused and not item["urgent"]:
+        if focused and not (item["urgent"] or item["interrupt_focus"]):
             continue
         if not item["urgent"]:
             if hearing(2000):                                   # don't talk over you
