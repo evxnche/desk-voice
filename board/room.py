@@ -1,6 +1,6 @@
 # Today screen: UK local time (from NTP) + outside weather (desk-voice /api/weather -> Open-Meteo).
 import time, requests, _thread
-import dashboard, battery, font5, secrets, home
+import dashboard, battery, font5, secrets, home, palicon
 
 WEATHER_URL = secrets.VOICE_URL.replace("/api/voice", "/api/weather") + "?k=" + secrets.VOICE_KEY
 WEATHER_MS = 10 * 60 * 1000
@@ -76,6 +76,7 @@ def draw():
         d.text_large("%02d:%02d" % (lt[3], lt[4]), 40, 50, 8)
     else:
         d.text_large("--:--", 40, 50, 8)
+    palicon.draw(c, 366, 64, "today")
     d.line(0, 32, 400, 32, 1)
     d.line(0, 128, 400, 128, 1)
 

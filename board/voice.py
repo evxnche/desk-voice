@@ -246,9 +246,12 @@ class _Face:
         if self._due():
             pal.draw("think")
 
-    def waiting(self, left):
+    def waiting(self, left, keep_screen=False):
         if self._due(200):
-            pal.draw("waiting", left)
+            if keep_screen:
+                pal.reply_strip(left)
+            else:
+                pal.draw("waiting", left)
 
     def speaking(self, reply, huh, total):
         """First speaking frame. `total`: bytes of PCM to come (0 if unknown), to page long captions."""
@@ -371,7 +374,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
             audio.listen()                           # its ring buffer holds whatever you say next
             pcm = audio.record_followup(MAX_SECONDS, FOLLOWUP_MS, stop=lambda: back() or not key.value(),
                                         progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
-                                        waiting=None if keep_screen else face.waiting)
+                                        waiting=lambda left: face.waiting(left, keep_screen))
             if pcm is None:
                 return "back" if back() or not key.value() else "quiet"
         else:
@@ -458,7 +461,7 @@ def say(text, boot, connect, tapped=None):
     Ara's voice, then says it with the words underneath. False if it couldn't (no Wi-Fi, a server
     without /api/say) or BOOT stopped it, "interrupt" if a KEY tap did (you want to talk)."""
     back = lambda: not boot.value()
-    lines = pal.wrap(text)[:5]
+    lines = pal.caption_page(pal.wrap(text), 0)
     pal.draw("alert", 0, lines)
     if not connect():
         return False

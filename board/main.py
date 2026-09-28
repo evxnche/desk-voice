@@ -547,8 +547,7 @@ while True:
             time.sleep_ms(10)
         time.sleep_ms(30)
         boot_hit = key_hit = False
-        if not (on_screen and result == "quiet"):
-            redraw()
+        redraw()                                  # restores a utility screen's footer after the reply cue
     elif boot_tapped():
         if screen == "timer":
             timer.cancel()

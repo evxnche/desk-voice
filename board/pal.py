@@ -68,9 +68,16 @@ def _centred(d, s, y):
     s = dashboard.ascii(s)[:50]
     d.text(s, 200 - 4 * len(s), y, 1)
 
-def wrap(text, width=48):
+def wrap(text, width=23):
     lines, line = [], ""
     for word in dashboard.ascii(text).split():
+        if len(word) > width:
+            if line:
+                lines.append(line)
+                line = ""
+            while len(word) > width:
+                lines.append(word[:width])
+                word = word[width:]
         if line and len(line) + 1 + len(word) > width:
             lines.append(line)
             line = word
@@ -122,12 +129,12 @@ def draw(mood, level=0.0, caption=(), status="", bars=None, t=None, hint=""):
         # After an answer: still listening for a reply, no "gee gee" needed
         e = ("open", 1.1, 1.0, 0, 2)
         x0, y0 = crab(c, la=1, ra=1, left=e, right=e)
-        if level > 0:
-            c.fill_rect(200 - int(150 * level), 294, int(300 * level), 3, 1)   # time left to reply
-    y = 222
-    for line in caption[:5]:
-        _centred(d, line, y)
-        y += 14
+        _reply_cue(d, level)
+    y = 218
+    for line in caption[:3]:
+        line = dashboard.ascii(line)[:23]
+        d.text_large(line, 200 - 8 * len(line), y, 2)
+        y += 20
     if status:
         c.hline(0, 266, 400, 1)
         _centred(d, status, 274)
@@ -145,7 +152,22 @@ def speak_update(level, huh=False):
     _mouth(c, mx, my, "wavy" if huh and level < 0.15 else "talk", level)
     d.show()
 
-def caption_page(lines, done_fraction, per_page=5):
+def _reply_cue(d, left):
+    c = d.canvas
+    c.fill_rect(0, 272, 400, 28, 0)
+    c.hline(0, 272, 400, 1)
+    d.text_large("SAY YOUR REPLY", 88, 274, 2)
+    c.fill_rect(50, 296, 300, 3, 0)
+    if left > 0:
+        c.fill_rect(50, 296, int(300 * min(1, left)), 3, 1)
+
+def reply_strip(left):
+    """Temporary follow-up cue over a utility screen; its next normal redraw restores the footer."""
+    d = dashboard.display()
+    _reply_cue(d, left)
+    d.show()
+
+def caption_page(lines, done_fraction, per_page=3):
     """The page of caption lines that goes with how much of the answer has played."""
     if len(lines) <= per_page:
         return lines
@@ -239,18 +261,20 @@ class Ambient:
 
 ambient = Ambient()
 
-def status_line(limits):
-    """'01:52  16c cloudy  claude 34%  codex 12%' for the bottom of the Pal screen."""
+def status_line(limits, phase=None):
+    """Time plus alternating weather/agent usage; phase is injectable for host tests."""
     parts = []
     lt = room.local_time()
-    if lt:
-        parts.append("%02d:%02d" % (lt[3], lt[4]))
-    w = room.weather
-    if w:
-        parts.append("%dc %s" % (w["temp_c"], w["condition"].lower()))
-    for p in (limits or {}).get("providers", [])[:2]:
-        wins = p.get("windows") or []
-        if wins:
-            parts.append("%s %d%%" % (p.get("name", "?").lower(), int(wins[0].get("used", 0))))
-    s = "  ".join(parts)
-    return s if len(s) <= 50 else s.replace("  ", " ")
+    parts.append("%02d:%02d" % (lt[3], lt[4]) if lt else "--:--")
+    if phase is None:
+        phase = int(time.ticks_ms() / 6000)
+    if phase % 2 == 0:
+        w = room.weather
+        if w:
+            parts.append("%dc %s" % (w["temp_c"], w["condition"].lower()))
+    else:
+        for p in (limits or {}).get("providers", [])[:2]:
+            wins = p.get("windows") or []
+            if wins:
+                parts.append("%s %d%%" % (p.get("name", "?").lower(), int(wins[0].get("used", 0))))
+    return "  ".join(parts)[:50]

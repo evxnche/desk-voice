@@ -1,6 +1,6 @@
 # Focus timer: big countdown; KEY pauses/resumes, BOOT cancels, chime when it ends.
 import time, math, struct
-import dashboard, battery, audio
+import dashboard, battery, audio, palicon
 
 active = False
 paused = False
@@ -79,6 +79,7 @@ def draw():
     else:
         mins = total_ms // 60000
         d.text("%d minute %s" % (mins, label.lower()), 20, 246, 1)
+    palicon.draw(c, 352, 236, "focus", time.ticks_ms() // 1000)
     c.fill_rect(0, 286, 400, 14, 1)
     d.text("KEY: %s   BOOT: cancel" % ("resume" if paused else "pause"), 4, 289, 0)
     d.show()
@@ -90,6 +91,7 @@ def draw_done():
     msg = "%d min %s complete" % (total_ms // 60000, label.lower())
     d.text_large(dashboard.ascii(msg)[:24], (400 - 16 * min(24, len(msg))) // 2, 150, 2)
     d.text("Take a short break.", 124, 190, 1)
+    palicon.draw(d.canvas, 185, 220, "done")
     d.canvas.fill_rect(0, 286, 400, 14, 1)
     d.text("KEY or BOOT: dismiss", 4, 289, 0)
     d.show()

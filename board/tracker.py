@@ -5,7 +5,7 @@
 # hours: the screen keeps the last position it saw.
 import time, json, requests, _thread, math, framebuf
 from array import array
-import dashboard, battery, font5, secrets, room, flights
+import dashboard, battery, font5, secrets, room, flights, palicon
 
 URL = secrets.VOICE_URL.replace("/api/voice", "/api/track") + "?k=" + secrets.VOICE_KEY
 MAP_URL = secrets.VOICE_URL.replace("/api/voice", "/api/trackmap") + "?k=" + secrets.VOICE_KEY
@@ -324,6 +324,7 @@ def _draw_static(d):
         c.fill_rect(258, 264, int(132 * frac), 4, 1)
         font5.text(c, "%d%% of the way" % int(frac * 100), 256, 250)
     stale = info is not None and not info.get("seen") and last is not None
+    palicon.draw(c, 360, 220, "tracking")
     foot = ("no signal since %s" % seen_at) if stale else ("updated %s" % seen_at) if last else \
            ("checked %s" % _clock()) if info else "looking..."
     c.fill_rect(0, 286, 400, 14, 1)

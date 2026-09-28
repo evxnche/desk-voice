@@ -1,7 +1,7 @@
 # Agent babysitter: alerts pushed by the Mac's Claude Code / Codex hooks over the LAN, plus WhatsApp
 # messages from the iPhone (phone.py; kind "message", agent = sender, project = group).
 import time, math, struct
-import dashboard, font5, audio
+import dashboard, font5, audio, palicon
 
 queue = []            # newest last: {"agent", "project", "kind": "needs"|"done"|"message", "message", "at"}
 DEDUP_MS = 2 * 60 * 1000
@@ -113,6 +113,8 @@ def draw(alert=None):
     c.fill_rect(0, 0, 400, 34, 1)
     d.text("WHATSAPP" if a["kind"] == "message" else "AGENT", 10, 13, 0)
     d.text(a["at"], 392 - 8 * len(a["at"]), 13, 0)
+    c.fill_rect(300, 3, palicon.WIDTH, palicon.HEIGHT, 0)
+    palicon.draw(c, 300, 3, "done" if a["kind"] == "done" else "alert")
     title = dashboard.ascii(_title(a))
     scale = 3 if len(title) <= 16 else 2
     d.text_large(title[:24], 10, 52, scale)

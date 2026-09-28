@@ -1,7 +1,7 @@
 # Spotify now-playing screen. The board keeps its own Spotify refresh token (spotify.json, saved
 # when you sign in from the remote page); desk-voice /api/spotify swaps it for access tokens.
 import json, time, requests, _thread, framebuf, hashlib, binascii
-import dashboard, font5, secrets
+import dashboard, font5, secrets, palicon
 
 API = secrets.VOICE_URL.replace("/api/voice", "/api/spotify") + "?k=" + secrets.VOICE_KEY
 TOKEN_FILE = "spotify.json"
@@ -205,6 +205,7 @@ def draw():
         c.fill_rect(12, 208, 376 * pos // dur, 8, 1)
         font5.text(c, _mmss(pos), 10, 224)
         font5.text(c, _mmss(dur), 390 - 6 * len(_mmss(dur)), 224)
+    palicon.draw(c, 356, 248, "music", time.ticks_ms() // 1000)
     c.fill_rect(0, 286, 400, 14, 1)
     d.text("KEY: play/pause   BOOT: next   hold: talk", 4, 289, 0)
     d.show()
