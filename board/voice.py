@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread, socket, ssl, network, binascii
-import adpcm, audio, secrets, flights, music, home, phone, pal, tracker
+import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, calendar
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -32,6 +32,7 @@ def _headers(wake, followup=False):
         hdrs["X-History"] = binascii.b2a_base64(json.dumps(recent).encode()).decode().strip()
     hdrs.update(music.headers())      # lets "play something chill" reach Spotify
     hdrs.update(tracker.headers())    # "how's the flight doing?"
+    hdrs.update(calendar.headers())   # "what's on today?"
     return hdrs
 
 def _request(data, box, hdrs, url=None):

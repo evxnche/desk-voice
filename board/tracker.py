@@ -32,10 +32,12 @@ on_news = None       # companion's hook: on_news(text)
 
 def _save():
     with open(FILE, "w") as f:
-        json.dump({"f": flight}, f)
+        json.dump({"f": flight, "said": list(_said)}, f)    # a restart doesn't repeat "it's landed"
 
 try:
-    flight = json.load(open(FILE)).get("f", "")
+    _saved = json.load(open(FILE))
+    flight = _saved.get("f", "")
+    _said.update(_saved.get("said", []))
 except Exception:
     pass
 
@@ -64,6 +66,7 @@ def _clock(lt=None, add_min=0):
 def _news(key, text):
     if key not in _said:
         _said.add(key)
+        _save()
         if on_news:
             on_news(text)
 
