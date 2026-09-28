@@ -16,12 +16,16 @@ BOARD = os.path.join(os.path.dirname(os.path.dirname(__file__)), "board")
 
 class CompanionStateTests(unittest.TestCase):
     def setUp(self):
+        schedule = types.ModuleType("schedule")
+        schedule.next_after = lambda minute: None
+        schedule.now_in = lambda minute: None
         self.modules = patch.dict(sys.modules, {
             "dashboard": types.ModuleType("dashboard"),
             "font5": types.ModuleType("font5"),
             "audio": types.ModuleType("audio"),
             "pal": types.ModuleType("pal"),
             "room": types.ModuleType("room"),
+            "schedule": schedule,
         })
         self.modules.start()
         sys.path.insert(0, BOARD)
@@ -281,9 +285,11 @@ class CompanionStateTests(unittest.TestCase):
         sys.modules["pal"].quiet_hours = lambda: False
         self.assertEqual(("flight", "Flight landed"), c.next_line(lambda _: False))
         c.check_rain({"rain_soon": "noon"})
+        self.assertEqual(("rain", "Rain's on the way, starting around noon."), c.next_line(lambda _: False))
+        c._add("limit", "Limit reached")
         self.assertIsNone(c.next_line(lambda _: False))
         self.now += c.GAP_MS
-        self.assertEqual(("rain", "Rain's on the way, starting around noon."), c.next_line(lambda _: False))
+        self.assertEqual(("limit", "Limit reached"), c.next_line(lambda _: False))
 
 
 if __name__ == "__main__":

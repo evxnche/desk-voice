@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker, memories
+import pal, companion, tracker, memories, schedule
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -200,6 +200,8 @@ def redraw():
         pal.ambient.enter()
     if screen == "track":
         tracker.enter()
+    if screen == "room":
+        room.enter()
     if screen == "limits":
         show_limits(footer)
 
@@ -333,7 +335,14 @@ def handle(method, path, q, body):
         return 200, "application/json", json.dumps({
             "screen": screen, "timer": timer.status(), "music": music.status(),
             "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
-            "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight})
+            "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight,
+            "calendar": schedule.status(), "cal_linked": bool(schedule.link)})
+    if path == "/calendar":
+        link = q.get("ics", "").strip()
+        if link and not (link.startswith("https://") or link.startswith("webcal://")):
+            return 400, "application/json", '{"error":"paste the https:// or webcal:// link"}'
+        schedule.set_link(link)
+        return 200, "application/json", '{"ok":true}'
     if path.startswith("/connect/"):
         return 200, "application/json", json.dumps(connect_agent(path, q))
     if path == "/agent":
@@ -419,7 +428,7 @@ screen = "pal"
 timer_second = None
 
 def _focused():
-    return timer.active and not timer.paused and timer.label.strip().lower().startswith("focus")
+    return timer.active and not timer.paused and timer.label.strip().lower().startswith(("focus", "deep work"))
 
 def tick_screen(speaking=False):
     """Keep the current screen up to date; call often. While `speaking` (an answer playing over the
@@ -429,12 +438,9 @@ def tick_screen(speaking=False):
     if speaking and screen != "flights":
         return
     if screen == "room":
-        lt = room.local_time()
-        minute = (lt[4] if lt else -1, room.version)   # redraw each minute and when new weather lands
-        if minute != shown_minute:
-            room.draw()
-            shown_minute = minute
-        elif room.weather_due() and connect():   # after drawing, so switching here shows at once
+        drawn = room._static is not None
+        room.frame()                             # new minute / weather, and the weather animation
+        if drawn and room.weather_due() and connect():   # after drawing, so switching here shows at once
             room.fetch_weather_soon()
     if screen == "flights":
         flights.tick(connect)
@@ -464,6 +470,7 @@ clock_ok = sync_clock()
 companion.check_limits(last)
 pal.ambient.on_hear = lambda: companion.heard_you(last)
 tracker.on_news = companion.flight_news
+checked_minute = None
 redraw()
 next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
@@ -576,6 +583,11 @@ while True:
     # Weather for every screen (the Pal's status line, rain warnings), not just "today"; the today
     # screen fetches its own after drawing, so switching there stays instant.
     tracker.tick(connect, screen == "track")     # also off-screen: take-off / landing lines
+    lt = room.local_time()
+    schedule.tick(connect, lt)
+    if lt and lt[4] != checked_minute:
+        checked_minute = lt[4]
+        companion.check_time(lt, timer.active, pal.ambient.hearing)
     if screen != "room" and room.weather_due() and wlan.isconnected():
         room.fetch_weather_soon()
     if room.version != weather_seen:
@@ -588,8 +600,8 @@ while True:
             said = False
             try:
                 said = voice.say(line[1], boot, connect, tapped=key_tapped)
-                if said == "interrupt":              # KEY tapped: it stops and listens to you
-                    converse(said)
+                if said == "interrupt" or (said is True and line[0] in companion.ASKS):
+                    converse("interrupt")            # KEY tapped, or it asked you something: it listens
             except Exception as e:
                 print("say failed:", e)
             while not boot.value():

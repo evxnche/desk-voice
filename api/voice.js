@@ -9,6 +9,7 @@ import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
 import { cleanFlight, track } from '../lib/track.js';
+import { describe as describeCalendar, getCalendar } from '../lib/calendar.js';
 import * as spotify from '../lib/spotify.js';
 import { decode as decodeAdpcm, encode as encodeAdpcm } from '../lib/adpcm.js';
 
@@ -227,6 +228,35 @@ function trackTools(cmds, tracked) {
   };
 }
 
+// The owner's calendar, when they've connected it on the board (X-Calendar: private iCal link).
+function calendarTools(icsUrl) {
+  if (!icsUrl) return {};
+  return {
+    get_calendar: tool({
+      description: "The owner's calendar events for today and tomorrow (UK time).",
+      inputSchema: jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
+      execute: async () => {
+        try {
+          return describeCalendar(await getCalendar(icsUrl));
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+    }),
+  };
+}
+
+// The gadget offered something when it spoke up ("Want to start a 45-minute deep work session?"):
+// a short yes starts it even if the model forgets the tool.
+const AFFIRM = /^\W*(yes|yeah|yep|yup|sure|ok(ay)?|go( for it| ahead)?|let'?s( do it| go)?|do it|please|sounds good|absolutely|definitely)\b/i;
+
+function offer(history) {
+  const last = history.at(-1), asked = history.at(-2);
+  if (!last || last.role !== 'assistant' || asked?.content !== SPOKE_UP || !/\?\s*$/.test(last.content)) return null;
+  const m = /(\d+)-minute (deep work|focus)/i.exec(last.content);
+  return m ? { minutes: Number(m[1]), label: /deep/i.test(m[2]) ? 'Deep work' : 'Focus' } : { question: last.content };
+}
+
 // Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
 export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert: null }) {
   const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
@@ -416,12 +446,14 @@ const WEATHERY = /\b(weather|temperature|forecast|rain(ing|y)?|sunny|snow(ing|y)
 // whose free-tier quota also stalled it for 6-53 s under load. STT_MODEL in the Vercel env overrides it.
 // The board's memory of this conversation: X-History is base64 JSON [[question, answer], ...], oldest
 // first, from the last 10 minutes. An empty question means the gadget spoke up on its own.
+const SPOKE_UP = '(Nothing. You spoke up on your own.)';
+
 function historyFrom(request) {
   try {
     const raw = request.headers.get('x-history');
     if (!raw) return [];
     return JSON.parse(Buffer.from(raw, 'base64').toString('utf8')).slice(-6).flatMap(([q, a]) => [
-      { role: 'user', content: q ? String(q) : '(Nothing. You spoke up on your own.)' },
+      { role: 'user', content: q ? String(q) : SPOKE_UP },
       { role: 'assistant', content: String(a) },
     ]);
   } catch {
@@ -567,7 +599,9 @@ export async function POST(request) {
     const at = new RegExp(`^\\W*(?:${WAKE_SPELLINGS['gee gee']})\\b[\\s,.!?:;-]*`, 'i').exec(heard);
     if (at) heard = heard.slice(at[0].length);
     console.log('followup | transcript:', transcript);
-    if (!heard.trim() || NOT_A_REPLY.test(heard)) return ignored(heard);
+    // "Okay" to the gadget's own question is an answer, not a sign-off.
+    const answering = offer(historyFrom(request)) && AFFIRM.test(heard);
+    if (!heard.trim() || (NOT_A_REPLY.test(heard) && !answering)) return ignored(heard);
   }
   if (wake) {
     const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -603,6 +637,8 @@ export async function POST(request) {
   const cmds = [];
   const spotifyRefresh = request.headers.get('x-spotify-refresh') || '';
   const tracked = request.headers.get('x-track') || '';
+  const icsUrl = request.headers.get('x-calendar') || '';
+  const offered = offer(history);
   let text;
   const tChat = Date.now();
   try {
@@ -628,6 +664,9 @@ export async function POST(request) {
         'Use get_nearby_flights for questions about planes nearby, overhead or on the radar (planes 1 to 10 are numbered on screen). ' +
         'The gadget has screens (limits, today, pixel game, flights radar, music), a focus timer and Spotify control: ' +
         'use start_timer / timer_control, show_screen, spotify_play / spotify_control for those and confirm in a few words. ' +
+        (icsUrl ? 'Use get_calendar for questions about the owner\'s schedule, meetings or free time. ' : '') +
+        'If your last message offered something (like a deep work session) and the owner accepts, do it right away ' +
+        '(start_timer with that length and label) and confirm in a few words. ' +
         'Use track_flight when asked to track or follow a flight by number, or how a followed flight is doing ' +
         '(speak times as UK time and say roughly where it is); it opens the tracker screen. ' +
         'Use set_radar when asked to show, move or zoom the radar or to look at flights somewhere, then just confirm it in one ' +
@@ -641,6 +680,7 @@ export async function POST(request) {
       tools: selectVoiceTools(namedTool, {
         web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
         ...radarTools(view, changes, heard), ...trackTools(cmds, tracked),
+        ...calendarTools(icsUrl),
       }, boardTools(cmds, spotifyRefresh, deviceContext)),
       // The free-tier model sometimes skips searching for news and answers from stale memory, so
       // news-shaped questions must use a tool on the first step (web_search is the only one that fits).
@@ -650,6 +690,7 @@ export async function POST(request) {
       prepareStep: ({ stepNumber }) =>
         stepNumber !== 0 ? {}
           : namedTool ? { toolChoice: { type: 'tool', toolName: namedTool } }
+          : offered ? {}   // an answer to its own offer ("not right now") needs no forced tool
           : (tracked || FLIGHT_NO.test(heard)) && TRACKY.test(heard) && !MOVE_RADAR.test(heard)
             ? { toolChoice: { type: 'tool', toolName: 'track_flight' } }
           : MOVE_RADAR.test(heard) ? { toolChoice: { type: 'tool', toolName: 'set_radar' } }
@@ -660,6 +701,10 @@ export async function POST(request) {
     text = result.text;
     const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));
     applyBoardBackstops(heard, namedTool, cmds, view, changes, used);
+    // A short reply to the gadget's own offer still starts the promised session.
+    if (!namedTool && offered?.minutes && AFFIRM.test(heard) && !cmds.some((c) => c.do === 'timer')) {
+      cmds.push({ do: 'timer', minutes: offered.minutes, label: offered.label });
+    }
     text = memoryAcknowledgement(namedTool, cmds, text);
     console.log('heard:', heard, '| tools:', JSON.stringify(result.steps.flatMap((st) => st.toolCalls.map((c) => [c.toolName, c.input]))));
   } catch (e) {

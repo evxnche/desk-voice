@@ -24,6 +24,10 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div class=row><input id=fno placeholder="flight number, e.g. BA36" autocapitalize=characters autocorrect=off>
 <button onclick="go('/track?f='+encodeURIComponent(fno.value.trim()))">Track</button></div>
 <button onclick="go('/track?f=')" style="width:100%%;margin-top:8px">Stop tracking</button>
+<h2>CALENDAR</h2><div id=cal style="margin-bottom:8px;opacity:.8">...</div>
+<div class=row><input id=ics placeholder="private iCal link (.ics)" autocapitalize=off autocorrect=off>
+<button onclick="go('/calendar?ics='+encodeURIComponent(ics.value.trim()));ics.value=''">Save</button></div>
+<button onclick="go('/calendar?ics=')" style="width:100%%;margin-top:8px">Disconnect calendar</button>
 <h2>FOCUS TIMER</h2><div class=grid>
 <button onclick="go('/timer?minutes=25')">25 min</button><button onclick="go('/timer?minutes=50')">50 min</button>
 <button onclick="go('/timer?minutes=5&label=Break')">5 min break</button></div>
@@ -55,6 +59,7 @@ async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
 async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
 st.textContent=[s.alert,s.timer,s.music,s.track].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen);
+cal.textContent=s.cal_linked?'Connected: '+s.calendar:'Not connected. Google Calendar: Settings > your calendar > Secret address in iCal format.';
 trk.textContent=s.flight?'Following '+s.track:'Not following a flight';document.getElementById('s-track').style.display=s.flight?'':'none';
 lim.textContent=s.limits.length?'Read directly from: '+s.limits.join(', '):'Not signed in: reading the relay'}catch(e){st.textContent='board not reachable'}}
 async function step(p){try{return await(await fetch(p,{method:'POST'})).json()}catch(e){return{error:'board not reachable'}}}
