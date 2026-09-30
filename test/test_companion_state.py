@@ -19,12 +19,14 @@ class CompanionStateTests(unittest.TestCase):
         schedule = types.ModuleType("schedule")
         schedule.next_after = lambda minute: None
         schedule.now_in = lambda minute: None
+        room = types.ModuleType("room")
+        room.clock = lambda h, m: "%d:%02d%s" % ((h % 24 - 1) % 12 + 1, m, "am" if h % 24 < 12 else "pm")
         self.modules = patch.dict(sys.modules, {
             "dashboard": types.ModuleType("dashboard"),
             "font5": types.ModuleType("font5"),
             "audio": types.ModuleType("audio"),
             "pal": types.ModuleType("pal"),
-            "room": types.ModuleType("room"),
+            "room": room,
             "schedule": schedule,
         })
         self.modules.start()

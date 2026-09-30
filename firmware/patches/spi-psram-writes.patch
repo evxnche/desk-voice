@@ -1,0 +1,46 @@
+diff --git a/ports/esp32/machine_hw_spi.c b/ports/esp32/machine_hw_spi.c
+index f2b47a0..b2a3433 100644
+--- a/ports/esp32/machine_hw_spi.c
++++ b/ports/esp32/machine_hw_spi.c
+@@ -34,6 +34,9 @@
+ #include "extmod/modmachine.h"
+ 
+ #include "driver/spi_master.h"
++#include "esp_heap_caps.h"
++#include "esp_memory_utils.h"
++#include "py/mperrno.h"
+ #include "soc/gpio_sig_map.h"
+ #include "soc/spi_pins.h"
+ 
+@@ -348,6 +351,31 @@ static void machine_hw_spi_transfer(mp_obj_base_t *self_in, size_t len, const ui
+         if (dest != NULL) {
+             memcpy(dest, &transaction.rx_data, len);
+         }
++    } else if (dest == NULL && self->bits == 8 && !esp_ptr_dma_capable(src)) {
++        // Desk Pal: a write from PSRAM (the display frame) makes ESP-IDF malloc an internal DMA copy
++        // of every chunk. With internal RAM short that malloc fails, the queue call's error was
++        // ignored, so the chunk was dropped (the rest of the frame landed shifted: the Pal "split
++        // into columns") and the last wait below never returned. Copy through one buffer allocated
++        // once instead, a chunk at a time, and raise if a transfer fails.
++        static uint8_t *bounce;
++        if (bounce == NULL) {
++            bounce = heap_caps_malloc(MP_HW_SPI_MAX_XFER_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
++            if (bounce == NULL) {
++                mp_raise_OSError(MP_ENOMEM);
++            }
++        }
++        esp_err_t err = ESP_OK;
++        spi_device_acquire_bus(self->spi, portMAX_DELAY);
++        for (size_t off = 0; off < len && err == ESP_OK; off += MP_HW_SPI_MAX_XFER_BYTES) {
++            size_t n = len - off < MP_HW_SPI_MAX_XFER_BYTES ? len - off : MP_HW_SPI_MAX_XFER_BYTES;
++            memcpy(bounce, src + off, n);
++            spi_transaction_t transaction = { .length = n * 8, .tx_buffer = bounce };
++            err = spi_device_polling_transmit(self->spi, &transaction);
++        }
++        spi_device_release_bus(self->spi);
++        if (err != ESP_OK) {
++            mp_raise_OSError(MP_EIO);
++        }
+     } else {
+         int offset = 0;
+         int bits_remaining = bits_to_send;

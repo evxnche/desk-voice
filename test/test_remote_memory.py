@@ -18,7 +18,7 @@ class RemoteMemoryTests(unittest.TestCase):
         sys.path.insert(0, BOARD)
         self.modules = {}
         for name in ("adpcm", "audio", "secrets", "flights", "music", "home", "phone", "pal", "tracker",
-                     "requests", "network", "dashboard", "room", "timer", "alerts", "remote", "usage"):
+                     "requests", "network", "dashboard", "room", "timer", "alerts", "remote", "usage", "plan"):
             self.modules[name] = types.ModuleType(name)
         self.modules["secrets"].VOICE_URL = "https://example.test/api/voice"
         self.modules["secrets"].VOICE_KEY = "test"
@@ -29,6 +29,8 @@ class RemoteMemoryTests(unittest.TestCase):
         self.modules["alerts"].clear = lambda: None
         self.modules["remote"].page = lambda: "page"
         self.modules["usage"].connected = lambda: []
+        self.modules["plan"].headers = lambda: {}
+        self.modules["audio"].volume = 7
         self.patch = patch.dict(sys.modules, self.modules)
         self.patch.start()
         self.memories = importlib.import_module("memories")

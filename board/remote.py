@@ -20,6 +20,15 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 </style></head><body>
 <h1>DESK PAL</h1><div id=st>connecting...</div>
 <h2>SCREEN</h2><div class=grid id=screens></div>
+<h2>VOLUME</h2><div class=row><button onclick="setVol('step=-1')">&minus;</button>
+<div id=vol style="text-align:center;padding:14px 0">...</div><button onclick="setVol('step=1')">+</button></div>
+<h2>TASKS</h2><div id=tasks style="margin-bottom:8px"></div>
+<div class=row><input id=taskin maxlength=60 placeholder="a task">
+<button onclick="planDo('task_add','text='+encodeURIComponent(taskin.value.trim()));taskin.value=''">Add</button></div>
+<button onclick="planDo('tasks_clear_done','')" style="width:100%%;margin-top:8px">Clear finished tasks</button>
+<h2>PROJECTS</h2><div id=projects style="margin-bottom:8px"></div>
+<div class=row><input id=projin maxlength=60 placeholder="project name">
+<button onclick="planDo('project','stage=idea&name='+encodeURIComponent(projin.value.trim()));projin.value=''">Add</button></div>
 <h2>TRACK A FLIGHT</h2><div id=trk style="margin-bottom:8px;opacity:.8">...</div>
 <div class=row><input id=fno placeholder="flight number, e.g. BA36" autocapitalize=characters autocorrect=off>
 <button onclick="go('/track?f='+encodeURIComponent(fno.value.trim()))">Track</button></div>
@@ -52,16 +61,36 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <button onclick="addMemory()">Save</button></div>
 <button onclick="clearMemories()" style="width:100%%;margin-top:8px">Forget all memories</button>
 <script>
-const NAMES={pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
+const NAMES={pal:'Pal',limits:'Limits',room:'Today',plan:'Plan',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
 const sc=document.getElementById('screens');
 for(const n in NAMES){const b=document.createElement('button');b.textContent=NAMES[n];b.id='s-'+n;b.onclick=()=>go('/screen?name='+n);sc.appendChild(b)}
 async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
 async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
-st.textContent=[s.alert,s.timer,s.music,s.track].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen);
-cal.textContent=s.cal_linked?'Connected: '+s.calendar:'Not connected. Google Calendar: Settings > your calendar > Secret address in iCal format.';
+st.textContent=([s.alert,s.timer,s.music,s.track].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen))+'\\nWake phrase: '+s.wake;
+vol.textContent='volume '+s.volume+' / 10';
+cal.textContent=s.cal_linked?'Connected: '+s.calendar:'Not connected. iCloud (Mac Calendar app): right-click a calendar > Share Calendar > Public Calendar, copy the webcal:// link and paste it here. Anyone with that link can see the calendar.';
 trk.textContent=s.flight?'Following '+s.track:'Not following a flight';document.getElementById('s-track').style.display=s.flight?'':'none';
 lim.textContent=s.limits.length?'Read directly from: '+s.limits.join(', '):'Not signed in: reading the relay'}catch(e){st.textContent='board not reachable'}}
+async function setVol(q){await step('/volume?'+q);refresh()}
+async function planDo(d,q){await step('/plan?do='+d+'&'+q);refreshPlan()}
+function btn(label,f){const b=document.createElement('button');b.textContent=label;b.onclick=f;b.style.flex='0 0 auto';return b}
+async function refreshPlan(){try{const p=await(await fetch('/plan')).json();
+const tb=document.getElementById('tasks');tb.textContent='';
+if(!p.tasks.length)tb.textContent='Nothing to do';
+for(const t of p.tasks){const row=document.createElement('div');row.className='row';row.style.cssText='margin-bottom:8px;align-items:center';
+const v=document.createElement('div');v.textContent=(t.done?'[x] ':'[ ] ')+t.t;v.style.opacity=t.done?.5:1;
+row.append(v,btn(t.done?'Undo':'Done',()=>planDo('task_done','done='+(t.done?0:1)+'&text='+encodeURIComponent(t.t))),
+btn('Remove',()=>planDo('task_remove','text='+encodeURIComponent(t.t))));tb.appendChild(row)}
+const pb=document.getElementById('projects');pb.textContent='';
+if(!p.projects.length)pb.textContent='No projects yet';
+for(const pr of p.projects){const row=document.createElement('div');row.className='row';row.style.cssText='margin-bottom:8px;align-items:center';
+const v=document.createElement('div');v.textContent=pr.n;const sel=document.createElement('select');
+sel.style.cssText='font:inherit;padding:10px;border-radius:12px;flex:0 0 auto';
+for(const s of p.stages){const o=document.createElement('option');o.value=o.textContent=s;o.selected=s==pr.s;sel.appendChild(o)}
+sel.onchange=()=>planDo('project','name='+encodeURIComponent(pr.n)+'&stage='+sel.value);
+row.append(v,sel,btn('Remove',()=>planDo('project_remove','name='+encodeURIComponent(pr.n))));pb.appendChild(row)}
+}catch(e){document.getElementById('tasks').textContent='Tasks unavailable'}}
 async function step(p){try{return await(await fetch(p,{method:'POST'})).json()}catch(e){return{error:'board not reachable'}}}
 function done(r,who){login.textContent=r.ok?who+' connected. Limits update in a few seconds.':r.error;refresh()}
 async function claude(){const r=await step('/connect/claude');if(r.error)return done(r);login.textContent='';
@@ -98,7 +127,7 @@ async function deleteMemory(index){await step('/memories/delete?index='+index);r
 async function clearMemories(){await step('/memories/clear');refreshMemories()}
 document.getElementById('locbtn').addEventListener('click',()=>{
 window.location.href='https://desk-voice.vercel.app/api/locate?board='+encodeURIComponent(window.location.host)});
-refresh();wifi();refreshMemories();setInterval(refresh,3000);
+refresh();wifi();refreshMemories();refreshPlan();setInterval(refresh,3000);
 </script></body></html>"""
 
 def page():

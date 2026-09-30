@@ -49,6 +49,17 @@ static uint32_t rpos;               // next sample wake.read() returns
 static volatile uint32_t mark;      // where wake.read() starts: PREROLL before the detection
 static volatile uint32_t preroll;   // samples between mark and the detection
 static volatile int floor_at_mark;  // background level just before the phrase (see noise_floor)
+static volatile uint32_t detections, timeouts, quiet_cleans;
+// MultiNet listens in windows: when one times out it starts afresh, and a phrase said across that
+// reset was lost (roughly the last 2 s of every window: ~1 "gee gee" in 3 went unheard with 6 s
+// windows). Windows are now long, and a new one starts during a quiet spell instead.
+#define WINDOW_MS   20000           // longest window (the create() timeout), for a room that's never quiet
+#define FRESH       (MIC_RATE * 4)  // a window this old...
+#define QUIET_RESET (MIC_RATE * 3)  // ...restarts after this much quiet (a phrase reports ~2 s after it ends)
+static uint32_t window;             // input samples since MultiNet's window started
+static uint32_t quiet_run;          // input samples of quiet in a row
+static int room = 1000;             // the room's background level (mean |sample| per read, raw), slow to rise
+static uint32_t reads;
 
 // Mean |sample| of the quietest 1024-sample frame in the 5 s before `end`: the room's background
 // level, which Python's end-of-speech detection compares against.
@@ -83,10 +94,35 @@ static void detect(int16_t *buf) {
             floor_at_mark = noise_floor(w);
             heard_prob = r->prob[0];
             heard_id = r->command_id[0] - 1;
+            detections++;
         }
         mn_iface->clean(mn);
+        window = 0;
     } else if (st == ESP_MN_STATE_TIMEOUT) {
         mn_iface->clean(mn);        // nothing said in this window: start a fresh one
+        window = 0;
+        timeouts++;
+    }
+}
+
+// After each read: is the room quiet (no one talking)? Then an old window is swapped for a new one.
+static void track_quiet(const int16_t *x, int n) {
+    int sum = 0;
+    for (int i = 0; i < n; i++) {
+        sum += x[i] < 0 ? -x[i] : x[i];
+    }
+    int level = sum / n;
+    if (level < room) {
+        room = level;
+    } else if (++reads % 16 == 0) {
+        room++;                     // follows a room that got louder, ~2 per second
+    }
+    quiet_run = level <= 2 * room + 4 ? quiet_run + n : 0;
+    window += n;
+    if (window >= FRESH && quiet_run >= QUIET_RESET) {
+        mn_iface->clean(mn);
+        window = 0;
+        quiet_cleans++;
     }
 }
 
@@ -112,6 +148,7 @@ static void listen_task(void *arg) {
             ring[(wpos + i - 1) % RING] = x[i];
         }
         wpos += n;
+        track_quiet(x + 1, n);
         int p = 0;
         for (int i = 1; i <= n; i++) {
             int v = x[i] * gain;
@@ -187,7 +224,7 @@ static mp_obj_t wake_stop(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(wake_stop_obj, wake_stop);
 
-// wake.init(phrases, timeout_ms=6000): load MultiNet from the "model" partition (once) and listen
+// wake.init(phrases, timeout_ms=WINDOW_MS): load MultiNet from the "model" partition (once) and listen
 // for these phrases; heard() returns the index of the phrase. Returns the phrases it rejected.
 static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
     wake_stop();
@@ -204,7 +241,7 @@ static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
         step(name);
         mn_iface = esp_mn_handle_from_name(name);
         step("create");
-        mn = mn_iface->create(name, n_args > 1 ? mp_obj_get_int(args[1]) : 6000);
+        mn = mn_iface->create(name, n_args > 1 ? mp_obj_get_int(args[1]) : WINDOW_MS);
         if (mn == NULL) {
             mp_raise_msg(&mp_type_MemoryError, MP_ERROR_TEXT("MultiNet create failed"));
         }
@@ -232,6 +269,7 @@ static mp_obj_t wake_init(size_t n_args, const mp_obj_t *args) {
         mp_obj_list_append(rejected, mp_obj_new_str_from_cstr(err->phrases[i]->string));
     }
     mn_iface->clean(mn);
+    window = 0;
     heard_id = -1;
     step("ready");
     return rejected;
@@ -333,12 +371,25 @@ static mp_obj_t wake_level(void) {
 }
 static MP_DEFINE_CONST_FUN_OBJ_0(wake_level_obj, wake_level);
 
-// wake.info(): (listening?, samples per chunk, chunks processed, slowest detect() in us).
+// wake.info(): (listening?, samples per chunk, chunks processed, slowest detect() in us,
+// phrases heard, windows timed out, windows restarted in a quiet spell, room level).
 static mp_obj_t wake_info(void) {
-    mp_obj_t t[4] = {mp_obj_new_bool(task != NULL), mp_obj_new_int(chunk),
-                     mp_obj_new_int_from_uint(chunks), mp_obj_new_int_from_uint(detect_us_max)};
-    return mp_obj_new_tuple(4, t);
+    mp_obj_t t[8] = {mp_obj_new_bool(task != NULL), mp_obj_new_int(chunk),
+                     mp_obj_new_int_from_uint(chunks), mp_obj_new_int_from_uint(detect_us_max),
+                     mp_obj_new_int_from_uint(detections), mp_obj_new_int_from_uint(timeouts),
+                     mp_obj_new_int_from_uint(quiet_cleans), mp_obj_new_int(room)};
+    return mp_obj_new_tuple(8, t);
 }
+
+// wake.threshold(p): how sure MultiNet must be to report a phrase, 0.0-0.9999 (lower = hears it
+// more readily, and look-alikes too; the server drops recordings without the phrase).
+static mp_obj_t wake_threshold(mp_obj_t p) {
+    if (mn == NULL) {
+        mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("call wake.init() first"));
+    }
+    return mp_obj_new_int(mn_iface->set_det_threshold(mn, mp_obj_get_float(p)));
+}
+static MP_DEFINE_CONST_FUN_OBJ_1(wake_threshold_obj, wake_threshold);
 static MP_DEFINE_CONST_FUN_OBJ_0(wake_info_obj, wake_info);
 
 static const mp_rom_map_elem_t wake_globals_table[] = {
@@ -350,6 +401,7 @@ static const mp_rom_map_elem_t wake_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_read), MP_ROM_PTR(&wake_read_obj) },
     { MP_ROM_QSTR(MP_QSTR_level), MP_ROM_PTR(&wake_level_obj) },
     { MP_ROM_QSTR(MP_QSTR_info), MP_ROM_PTR(&wake_info_obj) },
+    { MP_ROM_QSTR(MP_QSTR_threshold), MP_ROM_PTR(&wake_threshold_obj) },
     { MP_ROM_QSTR(MP_QSTR_debug), MP_ROM_PTR(&wake_debug_obj) },
 };
 static MP_DEFINE_CONST_DICT(wake_globals, wake_globals_table);

@@ -43,6 +43,7 @@ def load_pal():
     room = types.ModuleType("room")
     room.local_time = lambda: (2026, 9, 28, 9, 41, 0, 0, 0)
     room.weather = {"temp_c": 16, "condition": "Cloudy"}
+    room.clock = lambda h, m: "%d:%02d%s" % ((h % 24 - 1) % 12 + 1, m, "am" if h % 24 < 12 else "pm")
     audio = types.ModuleType("audio")
     old = {name: sys.modules.get(name) for name in ("dashboard", "room", "audio", "pal")}
     sys.modules.update(dashboard=dashboard, room=room, audio=audio)
@@ -129,10 +130,10 @@ class PalScreenTests(unittest.TestCase):
                                 {"name": "Codex", "windows": [{"used": 12}]}]}
         weather = pal.status_line(limits, phase=0)
         usage = pal.status_line(limits, phase=1)
-        self.assertIn("09:41", weather)
+        self.assertIn("9:41am", weather)
         self.assertIn("16c cloudy", weather)
         self.assertNotIn("claude", weather)
-        self.assertIn("09:41", usage)
+        self.assertIn("9:41am", usage)
         self.assertIn("claude 34%", usage)
         self.assertNotIn("cloudy", usage)
         self.assertEqual(weather, pal.status_line(limits, phase=2))

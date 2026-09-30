@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker, memories, schedule
+import pal, companion, tracker, memories, schedule, plan
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -202,10 +202,12 @@ def redraw():
         tracker.enter()
     if screen == "room":
         room.enter()
+    if screen == "plan":
+        plan.enter()
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("pal", "limits", "room", "pixel", "flights", "music", "track")
+SCREENS = ("pal", "limits", "room", "plan", "pixel", "flights", "music", "track")
 
 def cycle():
     """The screens BOOT steps through: the flight tracker only while it follows a flight."""
@@ -275,10 +277,32 @@ def run(cmd):
         alerts.clear()
         if screen == "alert":
             leave_takeover()
+    elif do == "volume":                   # {"level": 0-10} or {"step": +-n}
+        step, level = cmd.get("step"), cmd.get("level")
+        return audio.set_volume(audio.volume + int(step) if step else audio.volume if level is None else level)
+    elif do in PLAN_DO:                    # tasks and projects; each opens the plan screen
+        ok = PLAN_DO[do](cmd)
+        show("plan")
+        return ok
+
+PLAN_DO = {
+    "task_add": lambda c: plan.add_task(c.get("text")),
+    "task_done": lambda c: plan.finish_task(c.get("text"), c.get("done", True)),
+    "task_remove": lambda c: plan.remove_task(c.get("text")),
+    "tasks_clear_done": lambda c: plan.clear_done(),
+    "project": lambda c: plan.set_project(c.get("name"), c.get("stage")),
+    "project_remove": lambda c: plan.remove_project(c.get("name")),
+}
+
+wakes = [0, ""]      # times the wake phrase was heard since boot, and when last (see /state)
+
+def wake_status():
+    return "heard %d time%s since restart%s" % (wakes[0], "" if wakes[0] == 1 else "s",
+                                                ", last at " + wakes[1] if wakes[1] else "")
 
 def local_clock():
     lt = room.local_time()
-    return "%02d:%02d" % (lt[3], lt[4]) if lt else ""
+    return room.clock(lt[3], lt[4]) if lt else ""
 
 def handle(method, path, q, body):
     """LAN requests: the remote page, the Mac's agent hooks and the Spotify sign-in hand-off."""
@@ -336,7 +360,19 @@ def handle(method, path, q, body):
             "screen": screen, "timer": timer.status(), "music": music.status(),
             "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
             "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight,
-            "calendar": schedule.status(), "cal_linked": bool(schedule.link)})
+            "calendar": schedule.status(), "cal_linked": bool(schedule.link),
+            "volume": audio.volume, "wake": wake_status()})
+    if path == "/plan" and method == "GET":
+        return 200, "application/json", json.dumps(plan.state())
+    if path == "/plan" and q.get("do") in PLAN_DO:
+        cmd = dict(q)
+        if "done" in cmd:
+            cmd["done"] = cmd["done"] == "1"
+        return 200, "application/json", json.dumps({"ok": run(cmd)})
+    if path == "/volume":
+        level = run({"do": "volume", "level": q.get("level"), "step": q.get("step")})
+        audio.play(audio.tone((784,), 120), volume=0xC8)    # a blip at the new volume
+        return 200, "application/json", json.dumps({"volume": level})
     if path == "/calendar":
         link = q.get("ics", "").strip()
         if link and not (link.startswith("https://") or link.startswith("webcal://")):
@@ -458,6 +494,8 @@ def tick_screen(speaking=False):
         pal.ambient.tick(pal.status_line(last))
     if screen == "track":
         tracker.frame()
+    if screen == "plan":
+        plan.frame()
 
 next_wifi_try = 0
 web = webserver.Server()
@@ -516,6 +554,8 @@ while True:
     heard = audio.woke() if action is None else None
     if heard:
         action = "hold"                  # same as holding KEY, but it records until you stop talking
+        wakes[0] += 1
+        wakes[1] = local_clock()
     if action == "tap" and screen in ("alert", "timer_done"):
         if screen == "alert":
             alerts.clear()

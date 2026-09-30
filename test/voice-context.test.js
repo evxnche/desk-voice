@@ -96,3 +96,47 @@ test('memory acknowledgements state queued intent rather than completed persiste
   assert.match(memoryAcknowledgement('save_memory', [], 'Saved!'), /couldn't queue/i);
   assert.equal(memoryAcknowledgement(null, [], 'Weather is sunny.'), 'Weather is sunny.');
 });
+
+const planRequest = (plan, volume) => new Request('https://example.test/', { headers: {
+  'x-plan': header(plan), ...(volume !== undefined && { 'x-volume': String(volume) }),
+} });
+
+test('plan header decodes bounded tasks and projects, and volume 0-10', async () => {
+  const { decodePlan, decodeVolume } = await import('../api/voice.js');
+  assert.deepEqual(decodePlan(planRequest({ todo: ['Call the bank'], done: [], projects: [['ezwrite', 'testing']] })),
+    { todo: ['Call the bank'], done: [], projects: [{ name: 'ezwrite', stage: 'testing' }] });
+  assert.equal(decodePlan(planRequest({ todo: ['x'.repeat(61)], done: [], projects: [] })), null);
+  assert.equal(decodePlan(planRequest({ todo: [], done: [], projects: [['ezwrite', 'someday']] })), null);
+  assert.equal(decodeVolume(planRequest({}, 7)), 7);
+  assert.equal(decodeVolume(planRequest({}, 11)), null);
+});
+
+test('task, project and volume tools queue board commands matched to saved text', async () => {
+  const commands = [];
+  const context = { memories: [], alert: null, volume: 5,
+    plan: { todo: ['Call the bank', 'Buy milk'], done: ['Book dentist'], projects: [{ name: 'ezwrite', stage: 'building' }] } };
+  const tools = boardTools(commands, '', context);
+  await tools.update_tasks.execute({ action: 'add', text: '  renew   passport ' });
+  await tools.update_tasks.execute({ action: 'done', text: 'the bank' });
+  await tools.update_tasks.execute({ action: 'undo', text: 'dentist' });
+  assert.equal((await tools.update_tasks.execute({ action: 'remove', text: 'walk the dog' })).ok, false);
+  await tools.update_project.execute({ action: 'set', name: 'EZWrite', stage: 'testing' });
+  await tools.update_project.execute({ action: 'set', name: 'desk pal' });
+  assert.equal((await tools.set_volume.execute({ change: 'up' })).level, 7);
+  await tools.set_volume.execute({ level: 3 });
+  assert.deepEqual(commands, [
+    { do: 'task_add', text: 'renew passport' },
+    { do: 'task_done', text: 'Call the bank', done: true },
+    { do: 'task_done', text: 'Book dentist', done: false },
+    { do: 'project', name: 'ezwrite', stage: 'testing' },
+    { do: 'project', name: 'desk pal', stage: 'idea' },
+    { do: 'volume', step: 2 },
+    { do: 'volume', level: 3 },
+  ]);
+});
+
+test('the plan is quoted device context for ordinary questions only', () => {
+  const context = { memories: [], alert: null, plan: { todo: ['Buy milk'], done: [], projects: [] } };
+  assert.match(buildVoiceMessages([], "What's on my list?", context, null)[0].content, /Buy milk/);
+  assert.equal(buildVoiceMessages([], 'Remember I like tea', context, 'save_memory').length, 1);
+});

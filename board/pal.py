@@ -248,7 +248,7 @@ class Ambient:
                 f = (t * 0.35 + i / 3) % 1
                 d.text_large("Z" if i == 1 else "z", X0 + 10 * U + 6 + int(f * 40), y0 - 4 - int(f * 56) - 16, 2 + i)
             if lt:
-                _centred(d, "%02d:%02d" % (lt[3], lt[4]), 274)
+                _centred(d, room.clock(lt[3], lt[4]), 274)
             d.show()
             return
         else:
@@ -265,7 +265,7 @@ def status_line(limits, phase=None):
     """Time plus alternating weather/agent usage; phase is injectable for host tests."""
     parts = []
     lt = room.local_time()
-    parts.append("%02d:%02d" % (lt[3], lt[4]) if lt else "--:--")
+    parts.append(room.clock(lt[3], lt[4]) if lt else "--:--")
     if phase is None:
         phase = int(time.ticks_ms() / 6000)
     if phase % 2 == 0:

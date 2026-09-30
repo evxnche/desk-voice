@@ -57,6 +57,11 @@ def _uk_offset(t):
         return ts - ((time.localtime(ts)[6] + 1) % 7) * 86400
     return 3600 if last_sunday(3) <= t < last_sunday(10) else 0
 
+def clock(h, m):
+    """12-hour time, as everywhere on the board: 9:05am, 12:30pm."""
+    h %= 24
+    return "%d:%02d%s" % ((h - 1) % 12 + 1, m, "am" if h < 12 else "pm")
+
 def local_time():
     t = time.time()
     if time.localtime(t)[0] < 2025:              # clock never synced
@@ -185,7 +190,7 @@ def _draw_static(d, lt):
     c = d.canvas
     d.clear(0)
     if lt:
-        d.text("%s %d %s   %02d:%02d" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1], lt[3], lt[4]), 10, 9, 1)
+        d.text("%s %d %s   %s" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1], clock(lt[3], lt[4])), 10, 9, 1)
     battery.draw_small(d, 392, 9)
     d.line(0, 24, 400, 24, 1)
     w = weather

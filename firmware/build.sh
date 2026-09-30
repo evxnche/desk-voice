@@ -29,6 +29,11 @@ if ! cmp -s "$STAGE/board/sdkconfig.board" "$PORT/build-DESKPAL/sdkconfig.board.
 fi
 cp "$HERE/board/partitions-deskpal.csv" "$PORT/"
 
+# Fixes to MicroPython itself (applied once; see each patch's comments).
+for p in "$HERE"/patches/*.patch; do
+    git -C "$MPY" apply --reverse --check "$p" 2>/dev/null || git -C "$MPY" apply "$p"
+done
+
 # ESP-SR as a managed component of MicroPython's main component (added once).
 if ! grep -q "espressif/esp-sr" "$PORT/main/idf_component.yml"; then
     perl -0pi -e "s/^dependencies:\n/dependencies:\n  espressif\/esp-sr: \"$ESP_SR_VERSION\"\n/m" "$PORT/main/idf_component.yml"

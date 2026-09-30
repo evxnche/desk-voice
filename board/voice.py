@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread, socket, ssl, network, binascii
-import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memories, alerts, schedule
+import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memories, alerts, schedule, plan
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -57,6 +57,8 @@ def _headers(wake, followup=False):
     hdrs.update(music.headers())      # lets "play something chill" reach Spotify
     hdrs.update(tracker.headers())    # "how's the flight doing?"
     hdrs.update(schedule.headers())   # "what's on today?"
+    hdrs.update(plan.headers())       # "what's on my list?"
+    hdrs["X-Volume"] = str(audio.volume)   # "turn it up a bit"
     return hdrs
 
 def _request(data, box, hdrs, url=None):
@@ -359,9 +361,11 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
     Returns "back" as soon as `boot` is pressed at any stage, "quiet" if no follow-up came, None after
     a problem or a slip of the KEY, "interrupt" if KEY cut the reply short, else {"board": [commands run]}."""
     back = lambda: not boot.value()
+    face = _Face()
+    if heard:
+        face.listening()                             # show it heard you before the headers and connection
     wake = audio.WAKE_PHRASES[heard[0]] if heard else ""
     hdrs = _headers(wake, followup)
-    face = _Face()
     streams = []                                     # the upload that starts as you start talking
     def on_audio(mv, n):
         if streams and streams[0]:
@@ -381,7 +385,6 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         else:
             streams.append(_start_stream(hdrs))
             if heard:
-                face.listening()
                 pcm = audio.record_speech(MAX_SECONDS, heard, stop=back, progress=on_audio)
             else:
                 face.caption = ["let go of KEY to send"]

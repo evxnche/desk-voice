@@ -61,7 +61,7 @@ def _clock(lt=None, add_min=0):
     if not lt:
         return ""
     m = lt[3] * 60 + lt[4] + add_min
-    return "%02d:%02d" % (m // 60 % 24, m % 60)
+    return room.clock(m // 60, m % 60)
 
 def _news(key, text):
     if key not in _said:

@@ -4,7 +4,7 @@
 # 4 MHz (80 MHz / 20, exact) and the rate is 4 MHz / 256 = 15625 Hz, which keeps
 # the I2S clocks on the same exact ratio. Both codecs share BCLK/WS, so the
 # board records and plays one after the other, never at once.
-import math, struct, time, micropython
+import math, struct, time, micropython, json
 from machine import I2C, I2S, PWM, Pin
 try:
     import wake          # built into Desk Pal's own firmware (firmware/); stock MicroPython has no wake word
@@ -156,6 +156,26 @@ def woke():
 
 TX_BUF = 16000
 
+# Speaker volume 0 (silent) - 10, saved on the board; 7 plays each sound at the loudness it was tuned
+# at, and each step is 3 dB (the ES8311's volume register moves 0.5 dB per unit).
+VOLUME_FILE = "volume.json"
+DEFAULT_VOLUME = 7
+try:
+    volume = json.load(open(VOLUME_FILE))["level"]
+except Exception:
+    volume = DEFAULT_VOLUME
+
+def set_volume(level):
+    global volume
+    volume = max(0, min(10, int(level)))
+    with open(VOLUME_FILE, "w") as f:
+        json.dump({"level": volume}, f)
+    return volume
+
+def _volume_reg(tuned):
+    """The ES8311 register value for a sound tuned at `tuned` (volume 7), at the current volume."""
+    return 0 if volume == 0 else max(1, min(0xFF, tuned + (volume - DEFAULT_VOLUME) * 6))
+
 def play(buf, volume=0xD0, mono=False, stop=None, between=None):
     """Play 16-bit PCM: a buffer, or an iterable of chunks (a reply still downloading, voice.py).
     `stop()` is polled between chunks; returns False if it cut playback short.
@@ -163,7 +183,7 @@ def play(buf, volume=0xD0, mono=False, stop=None, between=None):
     sleep so other threads (screen fetches) run too: a write that waits for room in the output
     buffer holds them up. The buffer holds 0.5 s of mono, so between() may take up to ~0.3 s."""
     out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
-    _es8311_init(volume)
+    _es8311_init(_volume_reg(volume))
     pa(1)
     finished = True
     try:

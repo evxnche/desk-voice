@@ -65,7 +65,7 @@ def flight_news(text):
     _add("flight", text)
 
 def _hhmm(m):
-    return "%d:%02d" % (m // 60, m % 60)
+    return room.clock(m // 60, m % 60)
 
 def check_time(lt, timer_on, around):
     """Once a minute. `timer_on`: a focus timer is running; `around(ms)`: it heard you in the last ms."""
@@ -119,6 +119,10 @@ def check_rain(weather):
     global _rain_warned
     at = (weather or {}).get("rain_soon")
     if at and not _rain_warned:
+        try:
+            at = room.clock(int(at[:2]), int(at[3:5]))   # the server sends "14:30"
+        except ValueError:
+            pass
         _add("rain", "Rain's on the way, starting around %s." % at)
     _rain_warned = bool(at)
 
