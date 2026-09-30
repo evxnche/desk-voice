@@ -6,6 +6,7 @@ import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memorie
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
 FOLLOWUP_MS = 6000        # after an answer, how long it listens for a reply without "gee gee"
+REPLY_TIMEOUT = 310      # server allows 300 s to generate longer answers and speech
 
 # Conversation memory: the last few exchanges go with each question so "and tomorrow?" makes sense.
 # Kept in RAM on the board only (a restart clears it) and sent to desk-voice with the question.
@@ -66,20 +67,13 @@ def _request(data, box, hdrs, url=None):
     set box['done']."""
     try:
         hdrs = dict(hdrs, **{"Content-Type": "application/octet-stream"})
-        r = requests.post(url or (URL + flights.params() + home.query()), data=data, timeout=60, headers=hdrs)
+        r = requests.post(url or (URL + flights.params() + home.query()), data=data, timeout=REPLY_TIMEOUT, headers=hdrs)
         box["status"] = r.status_code
         size = int({k.lower(): v for k, v in r.headers.items()}.get("content-length", 0))
-        if size:                                  # big reads: r.content crawls at ~13 KB/s
-            body = bytearray(size)
-            mv, got = memoryview(body), 0
-            while got < size:
-                n = r.raw.readinto(mv[got:got + 16384])
-                if not n:
-                    break
-                got += n
-        else:
-            body = r.content
-        r.close()
+        try:
+            body = _read_body(r.raw, size) if size else r.content
+        finally:
+            r.close()
         box["body"] = body
     except Exception as e:
         box["error"] = str(e)
@@ -97,10 +91,12 @@ def _read_head(s):
         if name.strip().lower() == b"content-length":
             length = int(value)
 
-def _read_body(s, length):
+def _read_body(s, length, stop=None):
     if length is None:                            # Connection: close, so the body runs to EOF
         body = bytearray()
         while True:
+            if stop and stop():
+                raise OSError("Reply canceled")
             b = s.read(16384)
             if not b:
                 return body
@@ -108,9 +104,11 @@ def _read_body(s, length):
     body = bytearray(length)
     mv, got = memoryview(body), 0
     while got < length:
+        if stop and stop():
+            raise OSError("Reply canceled")
         n = s.readinto(mv[got:got + 16384])
         if not n:
-            break
+            raise OSError("Incomplete reply: %d of %d bytes" % (got, length))
         got += n
     return body
 
@@ -135,7 +133,7 @@ class _Stream:
 
     def _connect(self):
         s = socket.socket()
-        s.settimeout(65)                          # the server may take up to its 60 s limit
+        s.settimeout(REPLY_TIMEOUT)
         s.connect(socket.getaddrinfo(self.host, 443)[0][-1])
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.verify_mode = ssl.CERT_NONE           # as requests does on this board: no CA bundle here
@@ -172,7 +170,7 @@ class _Stream:
                     s.write(b"0\r\n\r\n")
                     status, length = _read_head(s)
                     if status != 200 or not length:
-                        box["body"], box["status"] = _read_body(s, length), status
+                        box["body"], box["status"] = _read_body(s, length, stop=lambda: self.quit), status
                         break
                     # ask() starts speaking once ~1 s of the reply is in and plays the rest as it arrives
                     body = bytearray(length)
@@ -181,7 +179,7 @@ class _Stream:
                     while got < length and not self.quit:
                         n = s.readinto(mv[got:got + 4096])
                         if not n:
-                            break
+                            raise OSError("Incomplete reply: %d of %d bytes" % (got, length))
                         got += n
                         box["got"] = got
                     break
@@ -192,29 +190,46 @@ class _Stream:
                 s.close()
             box["done"] = True
 
+def _head_end(body):
+    """Find the JSON line without copying the audio or limiting long answer text to 4 KB."""
+    for start in range(0, len(body), 1024):
+        at = bytes(body[start:start + 1024]).find(b"\n")
+        if at >= 0:
+            return start + at
+    raise OSError("Reply metadata is missing")
+
 def _enough(box):
     """True once the reply's first line and ~1 s of its ADPCM audio have arrived."""
     got = box.get("got", 0)
-    if not got:
+    try:
+        nl = _head_end(memoryview(box["body"])[:got]) if got else -1
+    except OSError:
         return False
-    nl = bytes(box["body"][:min(got, 4096)]).find(b"\n")
     return nl >= 0 and (got - nl - 1 >= 8000 or got == len(box["body"]))
 
 def _arriving(box, start):
-    """16-bit PCM of a reply still downloading, ~0.13 s at a time, waiting for more as needed."""
+    """16-bit PCM of a reply still downloading, ~0.13 s at a time, waiting for more as needed. No
+    pause while audio is ready: the speaker must be fed faster than it plays, and the download thread
+    gets its turns while audio.play() waits for room in the speaker buffer."""
     dec, body, pos = adpcm.Decoder(), box["body"], start
     while True:
         got, done = box.get("got", 0), "done" in box
         if got - pos >= 1024 or (done and got > pos):
             end = min(got, pos + 1024)
-            if not done:
-                time.sleep_ms(30)                 # let the download thread in: speaker writes hold it up
             yield dec.decode(memoryview(body)[pos:end])
             pos = end
         elif done:
+            if "error" in box:                        # the connection dropped: stop, don't pad
+                print("reply cut short:", box["error"])
             return
         else:
             time.sleep_ms(10)
+
+def _decoded(body, start):
+    """Decode completed ADPCM in small pieces; a long reply never needs a full PCM copy."""
+    dec, mv = adpcm.Decoder(), memoryview(body)
+    for pos in range(start, len(body), 1024):
+        yield dec.decode(mv[pos:pos + 1024])
 
 def _start_stream(hdrs):
     if not network.WLAN(network.STA_IF).isconnected():
@@ -227,7 +242,8 @@ def _start_stream(hdrs):
 class _Face:
     """The Pal while a question is on: listening (bars follow your voice), thinking, then speaking with
     its mouth following its own voice. Frames are paced to ~10 a second."""
-    def __init__(self):
+    def __init__(self, keep=False):
+        self.keep = keep          # over a screen an answer opened: the corner Pal, not the full one
         self.bars, self.next, self.levels, self.caption = [], 0, [], []
         self.lines, self.page, self.played, self.total, self.huh = [], [], 0, 0, False
 
@@ -243,37 +259,53 @@ class _Face:
             self.bars.append(min(1.0, audio.mean_level(mv[n - 2048:n]) / 80))
             del self.bars[:-25]
         if self._due():
-            pal.draw("listen", self.bars[-1] if self.bars else 0, self.caption, bars=self.bars)
+            if self.keep:
+                pal.corner("listen", bars=self.bars)
+            else:
+                pal.draw("listen", self.bars[-1] if self.bars else 0, self.caption, bars=self.bars)
 
     def thinking(self):
-        if self._due():
-            pal.draw("think")
+        if self._due(150 if self.keep else 100):
+            if self.keep:
+                pal.corner("think")
+            else:
+                pal.draw("think")
 
-    def waiting(self, left, keep_screen=False):
+    def waiting(self, left):
         if self._due(200):
-            if keep_screen:
-                pal.reply_strip(left)
+            if self.keep:
+                pal.corner("wait", left=left)
             else:
                 pal.draw("waiting", left)
 
     def speaking(self, reply, huh, total):
         """First speaking frame. `total`: bytes of PCM to come (0 if unknown), to page long captions."""
-        self.lines = pal.wrap(reply) if pal.CAPTIONS else []
+        self.lines = pal.wrap(reply) if pal.CAPTIONS and not self.keep else []
         self.huh, self.total, self.played, self.levels = huh, total, 0, []
         self.page = pal.caption_page(self.lines, 0)
-        pal.draw("huh" if huh else "speak", 0, self.page)
+        if self.keep:
+            self.next = 0
+            pal.corner("talk")
+        else:
+            pal.draw("huh" if huh else "speak", 0, self.page)
 
     def voiced(self, chunks):
         """Pass the reply's PCM through, noting each chunk's loudness for the mouth."""
         for chunk in chunks:
             self.levels.append(audio.mean_level(chunk))
+            del self.levels[:-(audio.TX_BUF // 4096)]
             self.played += len(chunk)
             yield chunk
 
     def mouth(self):
-        """Between chunks (~0.13 s of voice each). What you hear now was queued ~4 chunks ago: the
-        speaker buffer holds ~0.5 s."""
-        level = min(1.0, (self.levels[-4] if len(self.levels) >= 4 else 0) / 3000)
+        """Between chunks (~0.13 s of voice each). What you hear now was queued `lag` chunks ago: the
+        speaker buffer holds that much."""
+        lag = audio.TX_BUF // 4096
+        level = min(1.0, (self.levels[-lag] if len(self.levels) >= lag else 0) / 3000)
+        if self.keep:
+            if self._due(250):                       # ~4 frames a second is plenty at this size
+                pal.corner("talk", level)
+            return
         page = self.page
         if self.total:
             page = pal.caption_page(self.lines, max(0, self.played - audio.TX_BUF) / self.total)
@@ -307,14 +339,12 @@ def _run_board_commands(cmds, run):
 
 def _sound(box, body, nl):
     """The reply's audio as PCM chunks, and how many PCM bytes there are in all."""
-    if box.get("adpcm") is False:                   # plain PCM (an older server): wait for all of it
-        while "done" not in box:
-            time.sleep_ms(20)
+    if box.get("adpcm") is False:                   # plain PCM (an older server)
         return _chunks(memoryview(body)[nl + 1:]), len(body) - nl - 1
     total = (len(body) - nl - 1) * 4
     if "got" in box:
         return _arriving(box, nl + 1), total        # decode and play it as it downloads
-    return _chunks(adpcm.decode(memoryview(body)[nl + 1:])), total   # ~0.1 s for 6 s of speech
+    return _decoded(body, nl + 1), total
 
 def _post(job, box, back, face):
     """Run _request(*job) on a worker thread (the main thread if no stack fits) while the Pal thinks.
@@ -350,10 +380,13 @@ def _speak(sound, back, tapped, between):
         return "done"
     return why[0] if why else "back"
 
-def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=False, tapped=None):
+def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=False, tapped=None,
+        opened=None):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
     is given, or with `followup`, whatever you say in the FOLLOWUP_MS after an answer (no wake phrase;
-    `keep_screen` leaves the answer's screen up meanwhile). The Pal listens, thinks, then speaks the
+    `keep_screen`: an earlier answer opened the screen that's up, and the little corner Pal listens,
+    thinks and speaks over it; `opened()` says whether an answer has opened a screen, so this one's
+    reply goes over it the same way). Otherwise the Pal listens, thinks, then speaks the
     reply with its words underneath. If the reply comes with board commands (a screen for the weather,
     flights or music, a timer...) they `run` first, `tick(False)` draws that screen, and the reply is
     spoken over it with `tick(True)` keeping it up to date. `tapped()` (True once per KEY press)
@@ -361,7 +394,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
     Returns "back" as soon as `boot` is pressed at any stage, "quiet" if no follow-up came, None after
     a problem or a slip of the KEY, "interrupt" if KEY cut the reply short, else {"board": [commands run]}."""
     back = lambda: not boot.value()
-    face = _Face()
+    face = _Face(keep_screen)
     if heard:
         face.listening()                             # show it heard you before the headers and connection
     wake = audio.WAKE_PHRASES[heard[0]] if heard else ""
@@ -379,7 +412,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
             audio.listen()                           # its ring buffer holds whatever you say next
             pcm = audio.record_followup(MAX_SECONDS, FOLLOWUP_MS, stop=lambda: back() or not key.value(),
                                         progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
-                                        waiting=lambda left: face.waiting(left, keep_screen))
+                                        waiting=face.waiting)
             if pcm is None:
                 return "back" if back() or not key.value() else "quiet"
         else:
@@ -406,7 +439,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
                     return "back"
                 face.thinking()
                 time.sleep_ms(20)
-            if "error" in box:                       # streaming broke: send the whole recording instead
+            if "error" in box and "got" not in box:  # streaming broke before the reply: send it all again
                 box = {}
         if not box:
             if not connect():
@@ -421,7 +454,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         if box["status"] != 200:
             _problem("Assistant error %d: %s" % (box["status"], bytes(body[:80]).decode("utf-8", "ignore")), back)
             return None
-        nl = bytes(body[:min(box.get("got", len(body)), 4096)]).find(b"\n")
+        nl = _head_end(body)
         meta = json.loads(body[:nl])
         if meta.get("ignored"):                      # a look-alike woke it, or nothing followed the phrase
             if stream:
@@ -438,11 +471,14 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         memory_error = _run_board_commands(cmds, run)
         box["adpcm"] = meta.get("audio") == "adpcm"
         sound, total = _sound(box, body, nl)
-        if cmds:
+        face.keep = keep_screen or bool(opened and opened())
+        if face.keep:
             tick(False)
-        else:
-            face.speaking(reply, huh, total)
-        ended = _speak(face.voiced(sound), back, tapped, (lambda: tick(True)) if cmds else face.mouth)
+        face.speaking(reply, huh, total)
+        between = (lambda: (tick(True), face.mouth())) if face.keep else face.mouth
+        ended = _speak(face.voiced(sound), back, tapped, between)
+        if audio.starved:
+            print("voice: speaker ran dry %d time(s)" % audio.starved)
         if ended != "done" and stream:
             stream.quit = True
         if ended == "back":
@@ -480,7 +516,7 @@ def say(text, boot, connect, tapped=None):
             print("say failed:", box.get("error") or box["status"])
             return False
         body = box["body"]
-        nl = bytes(body[:4096]).find(b"\n")
+        nl = _head_end(body)
         box["adpcm"] = json.loads(body[:nl]).get("audio") == "adpcm"
         sound, total = _sound(box, body, nl)
         face.speaking(text, False, total)

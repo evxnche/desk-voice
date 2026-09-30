@@ -19,6 +19,12 @@ class Canvas:
     def hline(self, x, y, width, color):
         self.fill_rect(x, y, width, 1, color)
 
+    def rect(self, x, y, w, h, color):
+        self.fill_rect(x, y, w, 1, color)
+        self.fill_rect(x, y + h - 1, w, 1, color)
+        self.fill_rect(x, y, 1, h, color)
+        self.fill_rect(x + w - 1, y, 1, h, color)
+
 
 class Display:
     def __init__(self):
@@ -113,16 +119,19 @@ class PalScreenTests(unittest.TestCase):
         self.assertEqual("".join(lines), word)
         self.assertTrue(all(len(line) <= 23 for line in lines))
 
-    def test_reply_cue_and_progress_on_full_and_utility_screen(self):
+    def test_reply_cue_on_full_screen_and_corner_pal_over_a_screen(self):
         pal, display = load_pal()
         pal.draw("waiting", 0.5, t=0)
         self.assertIn("SAY YOUR REPLY", [text for text, *_ in display.texts])
         self.assertTrue(any(w > 0 and y >= 286 for _, y, w, _, _ in display.canvas.ops))
-        display.texts.clear()
-        display.canvas.ops.clear()
-        pal.reply_strip(0.5)
-        self.assertIn("SAY YOUR REPLY", [text for text, *_ in display.texts])
-        self.assertTrue(all(y >= 272 for _, y, _, _, _ in display.canvas.ops))
+        for mood, label in (("wait", "your turn"), ("listen", "listening"), ("think", "thinking"), ("talk", "talking")):
+            display.texts.clear()
+            display.canvas.ops.clear()
+            pal.corner(mood, level=0.5, left=0.5, bars=[0.5] * 20, t=0)
+            self.assertEqual([label], [text for text, *_ in display.texts])
+            # everything stays inside the corner box, so the screen underneath keeps showing
+            self.assertTrue(all(x >= pal.CX and y >= pal.CY - 5 and x + w <= 400 and y + h <= 300
+                                for x, y, w, h, _ in display.canvas.ops))
 
     def test_status_rotates_weather_and_agent_usage_every_six_seconds(self):
         pal, _ = load_pal()

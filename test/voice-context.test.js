@@ -140,3 +140,14 @@ test('the plan is quoted device context for ordinary questions only', () => {
   assert.match(buildVoiceMessages([], "What's on my list?", context, null)[0].content, /Buy milk/);
   assert.equal(buildVoiceMessages([], 'Remember I like tea', context, 'save_memory').length, 1);
 });
+
+test('agent limits questions open the limits screen even without show_screen', () => {
+  for (const heard of ['Where are my Codex limits at?', 'How are my Claude limits?', "What's my agent usage?"]) {
+    const cmds = [];
+    applyBoardBackstops(heard, null, cmds, { radius: 20 }, {}, []);
+    assert.deepEqual(cmds, [{ do: 'screen', name: 'limits' }], heard);
+  }
+  const speed = [];
+  applyBoardBackstops("What's the speed limit on a motorway?", null, speed, { radius: 20 }, {}, []);
+  assert.deepEqual(speed, []);
+});

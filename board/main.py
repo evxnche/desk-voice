@@ -154,16 +154,20 @@ def key_tapped():
     key_hit = False
     return hit
 
-def converse(result):
+def converse(result, opened=lambda: False):
     """After an answer, or a KEY tap that cut one short: keep listening for replies (no wake phrase)
-    until none comes. An answer that opened a screen (weather, radar, music) stays up meanwhile.
-    Returns the last result and whether that screen is still up."""
-    on_screen = False
+    until none comes. Once an answer opened a screen (limits, weather, radar, music...) the rest of
+    the conversation stays on it, with the little corner Pal; otherwise it's the full-screen Pal.
+    `opened()`: has this conversation opened a screen yet. Returns the last result and whether it did."""
     while isinstance(result, dict) or result == "interrupt":
-        on_screen = isinstance(result, dict) and bool(result["board"])
-        result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=on_screen,
-                           tapped=key_tapped)
-    return result, on_screen
+        result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=opened(),
+                           tapped=key_tapped, opened=opened)
+    return result, opened()
+
+def conversation():
+    """opened() for a conversation starting now: True once something calls show()."""
+    mark = shows
+    return lambda: shows != mark
 
 def pixel_key():
     """KEY on the pixel screen: jump the instant it goes down; 'hold' after 0.4 s (voice)."""
@@ -216,9 +220,12 @@ def cycle():
 # BOOT/dismiss returns to.
 home_screen = "plan"            # the start screen
 
+shows = 0     # show() calls so far: tells a conversation whether an answer opened a screen
+
 def show(name):
     """Switch to a screen (from BOOT, the remote page or a voice command)."""
-    global screen, home_screen
+    global screen, home_screen, shows
+    shows += 1
     if name in SCREENS:
         home_screen = name
     screen = name
@@ -594,7 +601,9 @@ while True:
     elif action == "hold":
         result, on_screen = None, False
         try:
-            result, on_screen = converse(voice.ask(key, boot, connect, run, tick_screen, heard, tapped=key_tapped))
+            opened = conversation()
+            result, on_screen = converse(voice.ask(key, boot, connect, run, tick_screen, heard, tapped=key_tapped,
+                                                   opened=opened), opened)
         except Exception as e:
             dashboard.message("Voice failed", str(e))
             time.sleep(5)

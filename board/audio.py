@@ -154,7 +154,8 @@ def woke():
     """(phrase index, probability, background level, pre-roll bytes) once the wake phrase is heard."""
     return wake.heard() if wake else None
 
-TX_BUF = 16000
+TX_BUF = 32000     # speaker buffer: ~1 s of mono voice, slack for screen redraws and download turns
+starved = 0        # times the last play() found the speaker buffer already empty (a gap you'd hear)
 
 # Speaker volume 0 (silent) - 10, saved on the board; 7 plays each sound at the loudness it was tuned
 # at, and each step is 3 dB (the ES8311's volume register moves 0.5 dB per unit).
@@ -177,15 +178,18 @@ def _volume_reg(tuned):
     return 0 if volume == 0 else max(1, min(0xFF, tuned + (volume - DEFAULT_VOLUME) * 6))
 
 def play(buf, volume=0xD0, mono=False, stop=None, between=None):
-    """Play 16-bit PCM: a buffer, or an iterable of chunks (a reply still downloading, voice.py).
+    """Play 16-bit PCM: a buffer, or an iterable of decoded chunks (voice.py).
     `stop()` is polled between chunks; returns False if it cut playback short.
     `between()` (keeping a screen up to date) runs after each 4 KB chunk, followed by a short
-    sleep so other threads (screen fetches) run too: a write that waits for room in the output
-    buffer holds them up. The buffer holds 0.5 s of mono, so between() may take up to ~0.3 s."""
+    sleep so other threads (screen fetches) run too. The buffer holds ~1 s of mono, so a chunk's
+    between() plus waiting for audio may take up to ~0.8 s before you'd hear a gap.
+    `starved` counts writes that found the buffer already empty."""
+    global starved
     out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
     _es8311_init(_volume_reg(volume))
     pa(1)
     finished = True
+    starved, queued, t0, per_ms = 0, 0, None, RATE * (2 if mono else 4) / 1000
     try:
         if isinstance(buf, (bytes, bytearray, memoryview)):
             mv = memoryview(buf)
@@ -194,10 +198,17 @@ def play(buf, volume=0xD0, mono=False, stop=None, between=None):
             if stop and stop():
                 finished = False
                 break
+            now = time.ticks_ms()
+            if t0 is None:
+                t0 = now
+            elif time.ticks_diff(now, t0) > queued / per_ms + 20:
+                starved += 1                      # everything queued had played before this chunk
+                t0, queued = now, 0               # a gap: time restarts from here
             out.write(chunk)
+            queued += len(chunk)
             if between:
                 between()
-                time.sleep_ms(50)
+                time.sleep_ms(5)                  # yield without starving the speaker during screen draws
         if finished:
             # write() returns once data is queued, not played: push a full buffer of
             # silence so the queued audio drains before the amp switches off.

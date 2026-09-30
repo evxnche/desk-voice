@@ -620,6 +620,7 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
   if (!changes.set && !cmds.length) {
     if (used.includes('get_nearby_flights') || (FLIGHTY.test(heard) && !used.includes('track_flight'))) cmds.push({ do: 'screen', name: 'flights' });
     else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
+    else if (LIMITSY.test(heard)) cmds.push({ do: 'screen', name: 'limits' });
   }
   if (!cmds.some((c) => c.do === 'volume')) {
     if (/\b(louder|turn (it |the volume )?up|volume up)\b/i.test(heard)) cmds.push({ do: 'volume', step: 2 });
@@ -627,6 +628,10 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
   }
   if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
 }
+
+// "Where are my Codex limits at?": the answer comes from the limits in the prompt, so the model often
+// skips show_screen; the limits screen opens anyway.
+const LIMITSY = /\b(claude|codex|agent|usage|rate)\b.*\blimits?\b|\blimits?\b.*\b(claude|codex|agents?)\b|\b(my|agent) usage\b/i;
 
 const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
 
@@ -744,8 +749,9 @@ export async function POST(request) {
       providerOptions: { openai: { reasoningEffort: 'minimal' } },
       system:
         'You are a friendly voice assistant living in a small desk gadget with a black-and-white screen. ' +
-        'Your reply is spoken aloud and shown on a tiny screen, so answer in one or two short sentences of plain speech: ' +
-        'no markdown, lists, emoji or URLs. Earlier messages are your conversation from the last few minutes: use them ' +
+        'Your reply is spoken aloud and shown on a tiny screen. Give a complete answer in natural, plain speech. ' +
+        'Match the detail to the question: keep simple answers concise, and give a longer explanation when needed or requested. ' +
+        'Use no markdown, lists, emoji or URLs. Earlier messages are your conversation from the last few minutes: use them ' +
         'to understand follow-ups like "and tomorrow?" or "what about Paris?". The owner can reply for a few seconds ' +
         'after you speak, but never ask a clarifying question, just give your best answer. ' +
         'Never say you are unaware of an event without searching first. ' +
@@ -798,7 +804,6 @@ export async function POST(request) {
           : MOVE_RADAR.test(heard) ? { toolChoice: { type: 'tool', toolName: 'set_radar' } }
           : needsSearch(heard) || RADARY.test(heard) || GADGETY.test(heard) || PLANNY.test(heard) ? { toolChoice: 'required' } : {},
       stopWhen: stepCountIs(4),
-      maxOutputTokens: 400,
     });
     text = result.text;
     const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));

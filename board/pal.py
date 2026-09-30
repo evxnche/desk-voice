@@ -161,10 +161,57 @@ def _reply_cue(d, left):
     if left > 0:
         c.fill_rect(50, 296, int(300 * min(1, left)), 3, 1)
 
-def reply_strip(left):
-    """Temporary follow-up cue over a utility screen; its next normal redraw restores the footer."""
+# ---- The corner Pal: a conversation that opened a screen (limits, weather...) carries on over it ----
+
+CW, CH = 120, 40
+CX, CY = 400 - CW, 300 - CH
+LABELS = {"wait": "your turn", "listen": "listening", "think": "thinking", "talk": "talking"}
+
+def _mini(c, x, y, mood, t, level):
+    """The Pal at 30 x 28 (palicon's shape), moving: waving while it waits for your reply, claws up
+    while it listens, one claw to its chin while it thinks, mouth following its voice while it talks."""
+    step = int(t * 3) % 2
+    bob = step if mood == "wait" else 0
+    y += bob
+    left_up = mood == "listen" or (mood == "wait" and step)
+    right_up = mood in ("listen", "think") or (mood == "wait" and not step)
+    c.fill_rect(x + 4, y + 4, 22, 15, 1)
+    c.fill_rect(x, y + (5 if left_up else 10), 4, 7, 1)
+    c.fill_rect(x + 26, y + (5 if right_up else 10), 4, 7, 1)
+    for foot in (6, 12, 18, 24):
+        c.fill_rect(x + foot, y + 19, 3, 5 - bob, 1)
+    blink = (t % 3.1) < 0.15
+    gx, gy = (1, -1) if mood == "think" else (0, 0)
+    for ex in (8, 19):
+        c.fill_rect(x + ex + gx, y + 9 + gy + (2 if blink else 0), 4, 1 if blink else 4, 0)
+    if mood == "talk":
+        h = 1 + int(4 * min(1.0, level))
+        c.fill_rect(x + 12, y + 15, 6, h, 0)
+    elif mood == "listen":
+        c.fill_rect(x + 14, y + 14, 3, 3, 0)
+    else:
+        c.fill_rect(x + 13, y + 15, 4, 2, 0)
+
+def corner(mood, level=0.0, left=None, bars=None, t=None):
+    """Draw the corner Pal over whatever screen is up and show it. `left` (0-1): the reply window's
+    time left, as a line along the bottom; `bars`: recent voice levels while it listens."""
+    t = time.ticks_ms() / 1000 if t is None else t
     d = dashboard.display()
-    _reply_cue(d, left)
+    c = d.canvas
+    c.fill_rect(CX, CY, CW, CH, 0)
+    c.rect(CX, CY, CW, CH, 1)
+    _mini(c, CX + 5, CY + 6, mood, t, level)
+    d.text(LABELS[mood], CX + 40, CY + 8, 1)
+    bx, by = CX + 40, CY + 22
+    if mood == "wait" and left is not None:
+        c.fill_rect(bx, by + 8, int(72 * max(0, min(1, left))), 3, 1)
+    elif mood == "listen":
+        for i, lv in enumerate((bars or [])[-12:]):
+            h = 1 + int(10 * min(1.0, lv))
+            c.fill_rect(bx + i * 6, by + 12 - h, 4, h, 1)
+    elif mood == "think":
+        for i in range(int(t * 3) % 4):
+            c.fill_rect(bx + i * 10, by + 6, 5, 5, 1)
     d.show()
 
 def caption_page(lines, done_fraction, per_page=3):

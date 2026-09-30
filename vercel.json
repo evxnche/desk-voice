@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/voice.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     },
     "api/say.js": {
       "maxDuration": 30
