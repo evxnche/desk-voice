@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getCalendar, validUrl } from '../lib/calendar.js';
+import { getCalendar, getCalendars, validUrl } from '../lib/calendar.js';
 
 const ICS = `BEGIN:VCALENDAR
 VERSION:2.0
@@ -70,4 +70,23 @@ test('only https (or webcal) links', () => {
   assert.equal(validUrl('http://x.com/a.ics'), '');
   assert.equal(validUrl('nonsense'), '');
   assert.equal(validUrl('webcal://p01.icloud.com/x'), 'https://p01.icloud.com/x');
+});
+
+test('two calendars merge in time order; a broken one is counted, not fatal', async () => {
+  const realFetch = globalThis.fetch;
+  const work = ICS.replace('SUMMARY:Dentist', 'SUMMARY:Standup').replace('20260928T163000Z', '20260928T083000Z')
+    .replace('20260928T171500Z', '20260928T084500Z');
+  globalThis.fetch = async (url) => url.includes('broken') ? new Response('nope', { status: 404 })
+    : new Response(url.includes('work') ? work : ICS);
+  try {
+    const cal = await getCalendars('webcal://example.com/home.ics webcal://example.com/work.ics', new Date('2026-09-28T07:00:00Z'));
+    assert.deepEqual(cal.today.map((e) => e.t), ['Standup', 'Team sync', 'Team sync', 'Dentist']);
+    assert.equal(cal.failed, 0);
+    const partial = await getCalendars('webcal://example.com/home.ics https://example.com/broken.ics', new Date('2026-09-28T07:00:00Z'));
+    assert.equal(partial.failed, 1);
+    assert.deepEqual(partial.today.map((e) => e.t), ['Team sync', 'Dentist']);
+    await assert.rejects(getCalendars('https://example.com/broken.ics'));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

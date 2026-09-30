@@ -207,14 +207,14 @@ def redraw():
     if screen == "limits":
         show_limits(footer)
 
-SCREENS = ("pal", "limits", "room", "plan", "pixel", "flights", "music", "track")
+SCREENS = ("plan", "pal", "limits", "room", "pixel", "flights", "music", "track")
 
 def cycle():
     """The screens BOOT steps through: the flight tracker only while it follows a flight."""
     return SCREENS if tracker.flight else SCREENS[:-1]
 # Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
 # BOOT/dismiss returns to.
-home_screen = "pal"
+home_screen = "plan"            # the start screen
 
 def show(name):
     """Switch to a screen (from BOOT, the remote page or a voice command)."""
@@ -270,7 +270,7 @@ def run(cmd):
         if tracker.flight:
             show("track")
         elif screen == "track":
-            show("pal")
+            show(SCREENS[0])
     elif do == "weather":                  # what the voice assistant just looked up
         room.set_weather(cmd["data"], cmd.get("home", True))
     elif do == "alerts_clear":
@@ -360,7 +360,7 @@ def handle(method, path, q, body):
             "screen": screen, "timer": timer.status(), "music": music.status(),
             "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
             "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight,
-            "calendar": schedule.status(), "cal_linked": bool(schedule.link),
+            "calendar": schedule.status(), "calendars": schedule.names(),
             "volume": audio.volume, "wake": wake_status()})
     if path == "/plan" and method == "GET":
         return 200, "application/json", json.dumps(plan.state())
@@ -373,11 +373,20 @@ def handle(method, path, q, body):
         level = run({"do": "volume", "level": q.get("level"), "step": q.get("step")})
         audio.play(audio.tone((784,), 120), volume=0xC8)    # a blip at the new volume
         return 200, "application/json", json.dumps({"volume": level})
-    if path == "/calendar":
+    if path == "/calendar":                  # ?ics=<link> adds a calendar; an empty one removes them all
         link = q.get("ics", "").strip()
         if link and not (link.startswith("https://") or link.startswith("webcal://")):
             return 400, "application/json", '{"error":"paste the https:// or webcal:// link"}'
-        schedule.set_link(link)
+        if link and not schedule.add_link(link):
+            return 400, "application/json", '{"error":"already added, or %d calendars is the most"}' % schedule.MAX_LINKS
+        if not link:
+            schedule.clear()
+        return 200, "application/json", '{"ok":true}'
+    if path == "/calendar/remove":
+        try:
+            schedule.remove_link(int(q.get("i", "")))
+        except (ValueError, IndexError):
+            return 400, "application/json", '{"error":"no such calendar"}'
         return 200, "application/json", '{"ok":true}'
     if path.startswith("/connect/"):
         return 200, "application/json", json.dumps(connect_agent(path, q))
@@ -460,7 +469,7 @@ def boot_tapped():
     boot_hit = False                     # swallow release bounce
     return True
 
-screen = "pal"
+screen = home_screen
 timer_second = None
 
 def _focused():

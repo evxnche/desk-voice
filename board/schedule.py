@@ -1,6 +1,7 @@
-# The owner's calendar (private iCal link pasted on deskpal.local), for companion.py: heads-ups
-# before meetings, and whether there's time for a focus session. desk-voice /api/calendar reads the
-# link (sent as X-Calendar) and returns today's and tomorrow's events in UK time.
+# The owner's calendars (private iCal links pasted on deskpal.local), for companion.py: heads-ups
+# before meetings, and whether there's time for a focus session; plan.py lists them. desk-voice
+# /api/calendar reads the links (sent space-separated as X-Calendar) and returns today's and
+# tomorrow's events from all of them, merged, in UK time.
 import time, json, requests, _thread
 import secrets
 
@@ -8,7 +9,9 @@ URL = secrets.VOICE_URL.replace("/api/voice", "/api/calendar") + "?k=" + secrets
 FILE = "calendar.json"
 REFRESH_MS = 10 * 60 * 1000
 
-link = ""
+MAX_LINKS = 3
+links = []
+link = ""           # the X-Calendar value: all the links, space-separated ("" = none)
 today = []          # [{"s": start min, "e": end min, "t": title[, "all_day": True]}], UK time
 tomorrow = []
 error = ""
@@ -17,16 +20,39 @@ _fetch_at = 0
 _busy = False
 
 try:
-    link = json.load(open(FILE)).get("ics", "")
+    links = json.load(open(FILE)).get("ics", [])
+    if isinstance(links, str):                    # saved before there could be more than one
+        links = [links] if links else []
+    link = " ".join(links)
 except Exception:
     pass
 
-def set_link(url):
+def _save():
     global link, today, tomorrow, _fetch_at, error
-    link, today, tomorrow, error = url.strip(), [], [], ""
+    link, today, tomorrow, error = " ".join(links), [], [], ""
     _fetch_at = 0
     with open(FILE, "w") as f:
-        json.dump({"ics": link}, f)
+        json.dump({"ics": links}, f)
+
+def add_link(url):
+    url = url.strip()
+    if url in links or len(links) >= MAX_LINKS:
+        return False
+    links.append(url)
+    _save()
+    return True
+
+def remove_link(i):
+    links.pop(i)
+    _save()
+
+def clear():
+    links.clear()
+    _save()
+
+def names():
+    """Each calendar as its host, for the remote page (the full link is private)."""
+    return [u.split("/")[2] if u.count("/") >= 2 else u for u in links]
 
 def headers():
     """X-Calendar for voice questions ("what's on today?")."""
@@ -38,7 +64,8 @@ def _worker(day):
         r = requests.get(URL, headers={"X-Calendar": link}, timeout=15)
         if r.status_code == 200:
             d = r.json()
-            today, tomorrow, _day, error = d["today"], d["tomorrow"], day, ""
+            today, tomorrow, _day = d["today"], d["tomorrow"], day
+            error = "%d calendar(s) failed" % d["failed"] if d.get("failed") else ""
         else:
             error = "calendar error %d" % r.status_code
         r.close()

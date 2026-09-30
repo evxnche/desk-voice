@@ -1,6 +1,6 @@
 // Today's and tomorrow's calendar for the board (companion.py: meeting heads-ups, when to offer a
-// focus session). GET ?k=VOICE_KEY with X-Calendar: the private iCal link.
-import { getCalendar } from '../lib/calendar.js';
+// focus session). GET ?k=VOICE_KEY with X-Calendar: the private iCal links, space-separated.
+import { getCalendars } from '../lib/calendar.js';
 
 export async function GET(request) {
   const url = new URL(request.url);
@@ -9,7 +9,7 @@ export async function GET(request) {
   }
   let data;
   try {
-    data = await getCalendar(request.headers.get('x-calendar'));
+    data = await getCalendars(request.headers.get('x-calendar'));
   } catch (e) {
     return new Response(String(e.message), { status: 502 });
   }

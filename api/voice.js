@@ -9,7 +9,7 @@ import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, clampRadius, geocode, getFlights, KM_PER_NM } from '../lib/flights.js';
 import { getWeather } from '../lib/weather.js';
 import { cleanFlight, track } from '../lib/track.js';
-import { describe as describeCalendar, getCalendar } from '../lib/calendar.js';
+import { describe as describeCalendar, getCalendars } from '../lib/calendar.js';
 import * as spotify from '../lib/spotify.js';
 import { decode as decodeAdpcm, encode as encodeAdpcm } from '../lib/adpcm.js';
 
@@ -237,7 +237,7 @@ function calendarTools(icsUrl) {
       inputSchema: jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
       execute: async () => {
         try {
-          return describeCalendar(await getCalendar(icsUrl));
+          return describeCalendar(await getCalendars(icsUrl));
         } catch (e) {
           return { ok: false, error: e.message };
         }
@@ -445,7 +445,11 @@ export function reply(heard, text, pcm, adpcm, radar = null, board = [], extra =
 }
 
 // How the transcriber may write a wake phrase, when it's not always spelled as said.
-const WAKE_SPELLINGS = { 'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g' };   // "Gigi", "gee gee", "GG", "G.G.", "G-G"
+const WAKE_SPELLINGS = {
+  'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g',   // "Gigi", "gee gee", "GG", "G.G.", "G-G"
+  ava: 'ava|eva|avah',                             // "Ava", and "Eva" when it hears an E
+};
+const ANY_WAKE = Object.values(WAKE_SPELLINGS).join('|');
 
 // Nothing to say: the board goes back to what it was doing.
 function ignored(heard) {
@@ -632,7 +636,7 @@ const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|
 
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
 const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
-  'with its wake word "GG" (said "gee gee").';
+  'with its wake word "Ava".';
 
 // The board calls this the moment you start talking, so a function that had gone cold (~0.6-0.9 s to
 // start) is warm by the time the question arrives.
@@ -686,8 +690,8 @@ export async function POST(request) {
   const wake = (request.headers.get('x-wake') || '').trim().toLowerCase();
   const followup = request.headers.get('x-followup') === '1';
   if (followup) {
-    // No wake phrase needed, but say one anyway ("gee gee, and tomorrow?") and it's dropped.
-    const at = new RegExp(`^\\W*(?:${WAKE_SPELLINGS['gee gee']})\\b[\\s,.!?:;-]*`, 'i').exec(heard);
+    // No wake phrase needed, but say one anyway ("ava, and tomorrow?") and it's dropped.
+    const at = new RegExp(`^\\W*(?:${ANY_WAKE})\\b[\\s,.!?:;-]*`, 'i').exec(heard);
     if (at) heard = heard.slice(at[0].length);
     console.log('followup | transcript:', transcript);
     // "Okay" to the gadget's own question is an answer, not a sign-off.

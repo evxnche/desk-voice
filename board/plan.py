@@ -175,7 +175,7 @@ def draw(lt=None):
     font5.text(c, "calendar", 210, 31)
     y = 45
     if not schedule.link:
-        for line in ("add your icloud link", "on deskpal.local"):
+        for line in ("add your calendars", "on deskpal.local"):
             font5.text(c, line, 210, y)
             y += 12
     else:

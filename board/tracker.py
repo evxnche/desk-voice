@@ -271,7 +271,7 @@ def _draw_static(d):
 
     if not flight:
         d.text_large("no flight tracked", 16, 110, 2)
-        d.text("say \"gee gee, track BA36\"", 16, 150, 1)
+        d.text("say \"ava, track BA36\"", 16, 150, 1)
         d.text("or use deskpal.local", 16, 166, 1)
         return
 

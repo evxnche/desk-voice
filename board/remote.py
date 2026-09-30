@@ -34,9 +34,9 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <button onclick="go('/track?f='+encodeURIComponent(fno.value.trim()))">Track</button></div>
 <button onclick="go('/track?f=')" style="width:100%%;margin-top:8px">Stop tracking</button>
 <h2>CALENDAR</h2><div id=cal style="margin-bottom:8px;opacity:.8">...</div>
+<div id=cals></div>
 <div class=row><input id=ics placeholder="private iCal link (.ics)" autocapitalize=off autocorrect=off>
-<button onclick="go('/calendar?ics='+encodeURIComponent(ics.value.trim()));ics.value=''">Save</button></div>
-<button onclick="go('/calendar?ics=')" style="width:100%%;margin-top:8px">Disconnect calendar</button>
+<button onclick="addCal()">Add</button></div>
 <h2>FOCUS TIMER</h2><div class=grid>
 <button onclick="go('/timer?minutes=25')">25 min</button><button onclick="go('/timer?minutes=50')">50 min</button>
 <button onclick="go('/timer?minutes=5&label=Break')">5 min break</button></div>
@@ -61,7 +61,7 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <button onclick="addMemory()">Save</button></div>
 <button onclick="clearMemories()" style="width:100%%;margin-top:8px">Forget all memories</button>
 <script>
-const NAMES={pal:'Pal',limits:'Limits',room:'Today',plan:'Plan',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
+const NAMES={plan:'Plan',pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
 const sc=document.getElementById('screens');
 for(const n in NAMES){const b=document.createElement('button');b.textContent=NAMES[n];b.id='s-'+n;b.onclick=()=>go('/screen?name='+n);sc.appendChild(b)}
 async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
@@ -69,9 +69,14 @@ async function refresh(){try{const s=await(await fetch('/state')).json();
 for(const n in NAMES)document.getElementById('s-'+n).className=s.screen==n?'on':'';
 st.textContent=([s.alert,s.timer,s.music,s.track].filter(Boolean).join('\\n')||'On: '+(NAMES[s.screen]||s.screen))+'\\nWake phrase: '+s.wake;
 vol.textContent='volume '+s.volume+' / 10';
-cal.textContent=s.cal_linked?'Connected: '+s.calendar:'Not connected. iCloud (Mac Calendar app): right-click a calendar > Share Calendar > Public Calendar, copy the webcal:// link and paste it here. Anyone with that link can see the calendar.';
+cal.textContent=s.calendars.length?s.calendar:'Not connected. iCloud (Mac Calendar app): right-click a calendar > Share Calendar > Public Calendar, copy the webcal:// link and paste it here. Anyone with that link can see the calendar. Add up to 3.';
+const cb=document.getElementById('cals');if(cb.dataset.v!=s.calendars.join()){cb.dataset.v=s.calendars.join();cb.textContent='';
+s.calendars.forEach((n,i)=>{const row=document.createElement('div');row.className='row';row.style.cssText='margin-bottom:8px;align-items:center';
+const v=document.createElement('div');v.textContent='Calendar '+(i+1)+' ('+n+')';row.append(v,btn('Remove',()=>go('/calendar/remove?i='+i)));cb.appendChild(row)})}
 trk.textContent=s.flight?'Following '+s.track:'Not following a flight';document.getElementById('s-track').style.display=s.flight?'':'none';
 lim.textContent=s.limits.length?'Read directly from: '+s.limits.join(', '):'Not signed in: reading the relay'}catch(e){st.textContent='board not reachable'}}
+async function addCal(){const v=ics.value.trim();if(!v)return;const r=await step('/calendar?ics='+encodeURIComponent(v));
+if(r.error)alert(r.error);else ics.value='';refresh()}
 async function setVol(q){await step('/volume?'+q);refresh()}
 async function planDo(d,q){await step('/plan?do='+d+'&'+q);refreshPlan()}
 function btn(label,f){const b=document.createElement('button');b.textContent=label;b.onclick=f;b.style.flex='0 0 auto';return b}

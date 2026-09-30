@@ -1,8 +1,9 @@
 # Renders the board's fonts into fixed-cell 1-bit bitmaps (run on the Mac: python3 tools/make_fonts.py).
 # Each cell matches the grid the screens were laid out on, so no layout moves:
 #   font_small.bin  MS Gothic 12 px in a 6 px cell       (was font5 5x7)
-#   font_body.bin   Departure Mono 11 px in an 8 px cell (was framebuf's 8x8)
-#   font_bigN.bin   ABC Areal Mono Bold in an 8N px cell (was the 8x8 scaled N times by text_large)
+#   font_body.bin   ABC Areal Mono Bold in an 8 px cell (was framebuf's 8x8)
+#   font_bigN.bin   Departure Mono in an 8N px cell (was the 8x8 scaled N times by text_large); it's a
+#                   pixel font drawn on an 11 px grid, so it's rendered at whole multiples of 11 px
 # File layout (read by board/bitfont.py): cell width, cell height, rows above the capitals, then 95
 # glyphs (chars 32..126), MONO_HLSB, 1 = ink. y on the board is still the top of the capitals, as with
 # the old fonts; taller glyphs (brackets, ascenders) reach `above` rows higher.
@@ -34,15 +35,18 @@ def build(name, path, size, cell_w):
     print("%-11s %s %d px: cell %dx%d, caps %d px (+%d above), glyph %d px wide, %d bytes"
           % (name, path, size, cell_w, cell_h, cap, above, adv, len(out)))
 
-build("font_small", "ms-gothic.ttf", 12, 6)   # 11 px squashes g/y descenders
-build("font_body", "DepartureMono-Regular.otf", 11, 8)
-for s in BIG_SCALES:
-    # the biggest size whose capitals fit 7.5 rows of the old 8-row glyph and whose width fits the cell
-    size = 8
+def fit(path, scale, step=1, rows=8):
+    """The biggest size (a multiple of `step`) whose capitals fit `rows` rows of the old 8-row glyph at
+    this scale and whose width fits the 8 x scale cell."""
+    size = step
     while True:
-        f = ImageFont.truetype(os.path.join(FONTS, "ABCArealMono-Bold.ttf"), size + 1)
-        cap = -f.getbbox("H", anchor="ls")[1]
-        if cap > 7.5 * s or f.getlength("0") > 8 * s:
-            break
-        size += 1
-    build("font_big%d" % s, "ABCArealMono-Bold.ttf", size, 8 * s)
+        f = ImageFont.truetype(os.path.join(FONTS, path), size + step)
+        if -f.getbbox("H", anchor="ls")[1] > rows * scale or f.getlength("0") > 8 * scale:
+            return size
+        size += step
+
+BODY, BIG = "ABCArealMono-Bold.ttf", "DepartureMono-Regular.otf"
+build("font_small", "ms-gothic.ttf", 12, 6)   # 11 px squashes g/y descenders
+build("font_body", BODY, fit(BODY, 1), 8)
+for s in BIG_SCALES:
+    build("font_big%d" % s, BIG, fit(BIG, s, 11), 8 * s)
