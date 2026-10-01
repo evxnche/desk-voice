@@ -27,10 +27,21 @@ GROK_USAGE = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
 # Command Code and OpenCode Go read usage with an API key pasted on the remote page. Unlike the
 # logins above these keys can run models, so treat oauth.json on the board as a secret.
 COMMANDCODE_USAGE = "https://api.commandcode.ai/alpha/billing/credits"
+COMMANDCODE_PLAN = "https://api.commandcode.ai/alpha/billing/subscriptions"
 OPENCODE_USAGE = "https://opencode.ai/zen/go/v1/usage"
 
+# Monthly credits (USD) per Command Code plan, from the CLI's own table; the API only says what's left.
+COMMANDCODE_CREDITS = {"individual-go": 10, "individual-goat": 70, "individual-pro": 30, "individual-pro-v1": 80,
+                       "individual-provider": 15, "individual-max": 150, "individual-ultra": 300, "teams-pro": 40}
+
+# Muse Code has no usage endpoint: its limits only arrive at the end of a reply, so each read sends
+# "hi" (~24 tokens) and keeps the response.subscription_usage event. The key is the Muse CLI's own
+# API key (from the Mac's Keychain); it doesn't rotate, so sharing it never logs the Mac out.
+MUSE_RESPONSES = "https://api.meta.ai/v1/responses"
+MUSE_MODEL = "muse-spark-1.3-contributor"
+
 NAMES = (("claude", "Claude"), ("codex", "Codex"), ("commandcode", "Command Code"),
-         ("opencode", "OpenCode"), ("grok", "Grok"))
+         ("opencode", "OpenCode"), ("grok", "Grok"), ("muse", "Muse Code"))
 
 def _load():
     try:
@@ -293,13 +304,24 @@ def _windows(*rows):
             for label, used, stamp in rows]
 
 def _commandcode(t):
-    r = _get(t, "commandcode", COMMANDCODE_USAGE, lambda e: {"Authorization": "Bearer " + e["access"]})
+    auth = lambda e: {"Authorization": "Bearer " + e["access"]}
+    r = _get(t, "commandcode", COMMANDCODE_USAGE, auth)
     limits = r.get("windowLimits") or {}
     rows = []
     for key, label in (("fiveHour", "5-hr"), ("weekly", "Weekly")):
         w = limits.get(key)
         if w and w.get("cap"):                                  # resetAt is 0 until the window starts
             rows.append((label, 100 * (w.get("used") or 0) / w["cap"], w["resetAt"] / 1000 - _UNIX if w.get("resetAt") else None))
+    # Monthly credits, the way the CLI's /usage works them out: plan allowance + extras, minus what's left.
+    sub = _get(t, "commandcode", COMMANDCODE_PLAN, auth).get("data") or {}
+    plan = (sub.get("planId") or "").lower().replace("_", "-")
+    match = [k for k in COMMANDCODE_CREDITS if plan.startswith(k)]
+    credits = r.get("credits") or {}
+    if sub.get("status") == "active" and match:
+        monthly = max(0, credits.get("monthlyCredits") or 0)
+        extra = max(0, credits.get("purchasedCredits") or 0) + max(0, credits.get("freeCredits") or 0)
+        pool = max(COMMANDCODE_CREDITS[max(match, key=len)], monthly) + extra
+        rows.append(("Month", 100 * (pool - monthly - extra) / pool, _stamp(sub.get("currentPeriodEnd") or "")))
     return _windows(*rows)
 
 def _opencode(t):
@@ -315,13 +337,35 @@ def _grok(t):
     label = {"WEEKLY": "Weekly", "MONTHLY": "Month", "DAILY": "Daily"}.get(kind.split("_")[-1], "Usage")
     return _windows((label, c.get("creditUsagePercent"), _stamp(c.get("billingPeriodEnd") or "")))
 
+def _muse(t):
+    r = requests.post(MUSE_RESPONSES, timeout=30, headers={"Authorization": "Bearer " + t["muse"]["access"]},
+                      json={"model": MUSE_MODEL, "input": "hi", "stream": True, "store": False,
+                            "reasoning": {"effort": "minimal"}, "max_output_tokens": 16})
+    try:
+        status, text = r.status_code, r.text
+    finally:
+        r.close()
+    if status != 200:
+        raise ValueError("error %d" % status)
+    for line in text.split("\n"):
+        if line.startswith("data:") and "subscription_usage" in line:
+            u = json.loads(line[5:])["subscription"]
+            rows = []
+            for w, label in ((u.get("window"), None), (u.get("weekly"), "Weekly")):
+                if w:
+                    rows.append((label or _label(60 * (w.get("window_duration_mins") or 0)), w.get("used_percent"),
+                                 w["resets_at"] - _UNIX if w.get("resets_at") else None))
+            return _windows(*rows)
+    raise ValueError("no usage in reply")
+
 def fetch(previous=None):
     """A snapshot shaped like the relay's ({"providers"}) for dashboard.draw. A provider
     that fails keeps its previous numbers, marked with why."""
     t = _load()
     before = {p.get("name"): p for p in (previous or {}).get("providers", [])}
     cards = []
-    readers = {"claude": _claude, "codex": _codex, "commandcode": _commandcode, "opencode": _opencode, "grok": _grok}
+    readers = {"claude": _claude, "codex": _codex, "commandcode": _commandcode, "opencode": _opencode, "grok": _grok,
+               "muse": _muse}
     for name, label in NAMES:
         if name not in t:
             continue

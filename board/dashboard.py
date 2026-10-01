@@ -60,7 +60,7 @@ def draw(data, footer=""):
     y = 30
     for p in data.get("providers", []):
         windows = p.get("windows", [])[:3]
-        if y + 12 + 13 * len(windows) > H - 14:   # keep clear of the footer bar
+        if y + 12 + 12 * len(windows) > H - 14:   # keep clear of the footer bar
             break
         name = ascii(p.get("name", "?"))
         if p.get("status", "live") != "live":
@@ -77,8 +77,8 @@ def draw(data, footer=""):
                 if win.get("at"):
                     resets += " (" + ascii(win["at"]) + ")"
                 font5.text(d.canvas, resets[:27], 196, y + 1)
-            y += 13
-        y += 4
+            y += 12
+        y += 3
 
     if footer:
         d.fill_rect(0, H - 14, W, 14, 1)
