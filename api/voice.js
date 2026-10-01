@@ -313,7 +313,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         const plan = deviceContext.plan || { todo: [], done: [], projects: [] };
         if (action === 'clear_done') { cmds.push({ do: 'tasks_clear_done' }); return { ok: true }; }
         const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-        if (!clean || PLACEHOLDER.test(clean)) return { ok: false, error: 'No task given: ask the owner what it is' };
+        if (!clean || (action === 'add' && PLACEHOLDER.test(clean))) return { ok: false, error: 'No task given: ask the owner what it is' };
         if (action === 'add') { cmds.push({ do: 'task_add', text: clean }); return { ok: true, added: clean }; }
         const match = matchItem(action === 'undo' ? plan.done : [...plan.todo, ...plan.done], clean);
         if (!match) return { ok: false, error: 'No task like that on the list', tasks: plan.todo };
@@ -339,7 +339,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
           cmds.push({ do: 'project_remove', name: match });
           return { ok: true, removed: match };
         }
-        if (!clean || PLACEHOLDER.test(clean)) return { ok: false, error: 'No project given: ask the owner which one' };
+        if (!clean || (!match && PLACEHOLDER.test(clean))) return { ok: false, error: 'No project given: ask the owner which one' };
         cmds.push({ do: 'project', name: match || clean, stage: stage || 'idea' });
         return { ok: true, project: match || clean, stage: stage || 'idea' };
       },
@@ -766,7 +766,8 @@ export async function POST(request) {
         'Match the detail to the question: keep simple answers concise, and give a longer explanation when needed or requested. ' +
         'Use no markdown, lists, emoji or URLs. Earlier messages are your conversation from the last few minutes: use them ' +
         'to understand follow-ups like "and tomorrow?" or "what about Paris?". The owner can reply for a few seconds ' +
-        'after you speak, but never ask a clarifying question, just give your best answer. ' +
+        'after you speak, but never ask a clarifying question, just give your best answer (except: when asked to add a task ' +
+        "or project without saying what it is, ask what it is). " +
         'Never say you are unaware of an event without searching first. ' +
         (weatherNow
           ? `Weather at the owner's location (${view.home.place || 'home'}) right now: ${JSON.stringify(weatherNow)}. ` +
@@ -783,7 +784,8 @@ export async function POST(request) {
         'use start_timer / timer_control, show_screen, spotify_play / spotify_control for those and confirm in a few words. ' +
         (icsUrl ? 'Use get_calendar for questions about the owner\'s schedule, meetings or free time. ' : '') +
         "The gadget keeps the owner's task list and project pipeline (stages: idea, building, testing, shipped) on its plan " +
-        'screen, next to their calendar; the device context lists them. Answer questions about them from that. ' +
+        'screen, next to their calendar; the device context lists them as they are right now, even if earlier messages said ' +
+        'otherwise. Answer questions about them from that. Only say a change was made if the tool returned ok; if it failed, say so. ' +
         'Use update_tasks and update_project only when asked to change them ("remind me to X" adds a task), then confirm in a few words. ' +
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         'If your last message offered something (like a deep work session) and the owner accepts, do it right away ' +
@@ -830,9 +832,11 @@ export async function POST(request) {
   } catch (e) {
     // The free tier allows ~5 model calls a minute, and a tool-using answer takes 2-3 of them.
     const limited = /rate limit/i.test(String(e?.message)) || e?.lastError?.statusCode === 429;
+    // A first step forced to use a tool where the model answered in words instead (asking what task to add).
+    const said = Array.isArray(e?.content) && e.content.find((c) => c.type === 'text')?.text;
     text = limited
       ? "I've hit the free tier's limit of a few questions a minute. Try again in a minute."
-      : 'Sorry, something went wrong answering that.';
+      : said || 'Sorry, something went wrong answering that.';
     console.error(e);
   }
   ms.chat = Date.now() - tChat;

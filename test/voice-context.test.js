@@ -164,3 +164,11 @@ test('"add a task" with no task asks instead of adding a made-up one', async () 
   assert.equal((await tools.update_tasks.execute({ action: 'add', text: 'new task list design' })).ok, true);
   assert.deepEqual(commands, [{ do: 'task_add', text: 'new task list design' }]);
 });
+
+test('a task that is literally called "New task" can still be ticked off or removed', async () => {
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null, plan: { todo: ['New task'], done: [], projects: [] } });
+  assert.equal((await tools.update_tasks.execute({ action: 'remove', text: 'New task' })).ok, true);
+  assert.equal((await tools.update_tasks.execute({ action: 'done', text: 'new task' })).ok, true);
+  assert.deepEqual(commands, [{ do: 'task_remove', text: 'New task' }, { do: 'task_done', text: 'New task', done: true }]);
+});
