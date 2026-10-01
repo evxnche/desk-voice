@@ -446,7 +446,7 @@ export function reply(heard, text, pcm, adpcm, radar = null, board = [], extra =
 
 // How the transcriber may write a wake phrase, when it's not always spelled as said.
 const WAKE_SPELLINGS = {
-  'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g',   // "Gigi", "gee gee", "GG", "G.G.", "G-G"
+  'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g|e\\.?[ ]?g',   // "Gigi", "gee gee", "GG", "G.G.", "G-G", "E.G."
   'hey ava': '(?:(?:hey|hi|hay|a)[ ,.!-]*)?(?:ava|eva|avah)',   // "Hey Ava", "Hi Eva", or just "Ava"
 };
 const ANY_WAKE = Object.values(WAKE_SPELLINGS).join('|');

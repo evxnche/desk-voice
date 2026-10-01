@@ -12,6 +12,11 @@ except ImportError:
     wake = None
 
 WAKE_PHRASES = ["gee gee"]  # "gg"; any English phrase works; "hey ava" wasn't waking it reliably
+# How sure MultiNet must be. Evan's "gee gee" at the desk scored 0.14-0.18 (only when said loudly; the
+# Mac's voice scores 0.3-0.4), so the default missed it. At 0.08, 1 false wake in 12 spoken sentences
+# ("gigantic genes"); the server drops a wake whose transcript has no wake phrase. Extra spellings
+# ("g g", "gigi") made it worse: 0 of 4.
+WAKE_THRESHOLD = 0.08
 
 RATE = 15625
 MCLK_HZ = RATE * 256
@@ -123,6 +128,7 @@ def listen():
     if not _wake_ready:
         try:
             wake.init(WAKE_PHRASES)
+            wake.threshold(WAKE_THRESHOLD)        # init makes a new MultiNet, at its default
         except Exception as e:                    # e.g. no speech model flashed: run without it
             print("wake phrase off:", e)
             wake = None
