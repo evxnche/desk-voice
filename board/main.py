@@ -430,7 +430,7 @@ def handle(method, path, q, body):
     return 404, "text/plain", "not found"
 
 def connect_agent(path, q):
-    """Sign-in steps from the remote page's Connect Claude / Connect Codex buttons."""
+    """Sign-in steps from the remote page's Connect buttons (Claude, Codex, Grok, and pasted keys)."""
     global next_fetch
     try:
         if path == "/connect/claude" and q.get("code"):
@@ -442,6 +442,14 @@ def connect_agent(path, q):
         elif path == "/connect/codex/check":
             if not usage.codex_poll():
                 return {"waiting": True}
+        elif path == "/connect/grok":
+            code, url = usage.grok_start()
+            return {"code": code, "url": url}
+        elif path == "/connect/grok/check":
+            if not usage.grok_poll():
+                return {"waiting": True}
+        elif path == "/connect/key":
+            usage.save_key(q.get("name", ""), q.get("key", ""))
         else:
             return {"error": "unknown step"}
     except Exception as e:

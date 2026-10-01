@@ -59,7 +59,7 @@ def draw(data, footer=""):
     # Text stops short of x=358 so it never runs under the Pal icon.
     y = 30
     for p in data.get("providers", []):
-        windows = p.get("windows", [])[:2]
+        windows = p.get("windows", [])[:3]
         if y + 12 + 13 * len(windows) > H - 14:   # keep clear of the footer bar
             break
         name = ascii(p.get("name", "?"))
@@ -72,10 +72,11 @@ def draw(data, footer=""):
             font5.text(d.canvas, ascii(win.get("label", ""))[:6], 10, y + 1)
             bar(d, 50, y, 100, 9, used)
             d.text("%d%%" % used, 156, y + 1, 1)
-            resets = "resets " + ascii(win.get("resets", "?"))
-            if win.get("at"):
-                resets += " (" + ascii(win["at"]) + ")"
-            font5.text(d.canvas, resets[:27], 196, y + 1)
+            if win.get("resets"):                   # blank when the window hasn't started yet
+                resets = "resets " + ascii(win["resets"])
+                if win.get("at"):
+                    resets += " (" + ascii(win["at"]) + ")"
+                font5.text(d.canvas, resets[:27], 196, y + 1)
             y += 13
         y += 4
 

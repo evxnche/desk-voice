@@ -53,7 +53,8 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <div class=row style="margin-top:8px"><input id=pw type=password placeholder="password">
 <button onclick="addWifi()">Save</button></div>
 <h2>AGENT LIMITS</h2><div id=lim style="margin-bottom:8px;opacity:.8">...</div>
-<div class=row><button onclick="claude()">Connect Claude</button><button onclick="codex()">Connect Codex</button></div>
+<div class=row><button onclick="claude()">Connect Claude</button><button onclick="codex()">Connect Codex</button><button onclick="grok()">Connect Grok</button></div>
+<div class=row style="margin-top:8px"><button onclick="key('commandcode','Command Code')">Command Code key</button><button onclick="key('opencode','OpenCode Go')">OpenCode Go key</button></div>
 <div id=login style="margin-top:8px"></div>
 <h2>AGENT ALERTS</h2><button onclick="go('/alerts/clear')" style="width:100%%">Dismiss alerts</button>
 <h2>MEMORY</h2><div id=memorylist style="margin-bottom:8px"></div>
@@ -103,12 +104,17 @@ const a=document.createElement('a');a.className='btn';a.href=r.url;a.target='_bl
 const i=document.createElement('input');i.placeholder='2. Paste the code it shows';i.style.marginTop='8px';
 const b=document.createElement('button');b.textContent='3. Save';b.style.cssText='margin-top:8px;width:100%%';
 b.onclick=async()=>done(await step('/connect/claude?code='+encodeURIComponent(i.value.trim())),'Claude');login.append(a,i,b)}
-async function codex(){const r=await step('/connect/codex');if(r.error)return done(r);
+function codex(){device('codex','Codex','OpenAI')}
+function grok(){device('grok','Grok','xAI')}
+async function device(p,who,site){const r=await step('/connect/'+p);if(r.error)return done(r);
 login.textContent='Open '+r.url+' and enter this code:';const c=document.createElement('div');
 c.style.cssText='font-size:28px;letter-spacing:.1em;margin:8px 0';c.textContent=r.code;
-const a=document.createElement('a');a.className='btn';a.href=r.url;a.target='_blank';a.textContent='Open the OpenAI page';
-login.append(c,a);const t=setInterval(async()=>{const s=await step('/connect/codex/check');
-if(!s.waiting){clearInterval(t);done(s,'Codex')}},5000)}
+const a=document.createElement('a');a.className='btn';a.href=r.url;a.target='_blank';a.textContent='Open the '+site+' page';
+login.append(c,a);const t=setInterval(async()=>{const s=await step('/connect/'+p+'/check');
+if(!s.waiting){clearInterval(t);done(s,who)}},5000)}
+function key(name,who){login.textContent='';const i=document.createElement('input');i.type='password';i.placeholder='Paste your '+who+' API key';
+const b=document.createElement('button');b.textContent='Save';b.style.cssText='margin-top:8px;width:100%%';
+b.onclick=async()=>done(await step('/connect/key?name='+name+'&key='+encodeURIComponent(i.value.trim())),who);login.append(i,b)}
 async function wifi(){try{const w=await(await fetch('/wifi')).json();const box=document.getElementById('wifi');
 box.textContent='Connected to '+(w.connected||'?')+'. Known: '+w.home;
 document.getElementById('loc').textContent=w.location?'Using: '+w.location+' (set for '+w.connected+')':'Using: your internet connection (approximate)';

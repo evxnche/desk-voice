@@ -19,6 +19,19 @@ CODEX_AUTH = "https://auth.openai.com"
 CODEX_DEVICE_PAGE = CODEX_AUTH + "/codex/device"
 CODEX_USAGE = "https://chatgpt.com/backend-api/wham/usage"
 
+# Grok CLI's public OAuth client and xAI's device-code sign-in (the same "enter this code" kind).
+GROK_ID = "b1a00492-073a-47ea-816f-4c329264a828"
+GROK_AUTH = "https://auth.x.ai/oauth2"
+GROK_USAGE = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
+
+# Command Code and OpenCode Go read usage with an API key pasted on the remote page. Unlike the
+# logins above these keys can run models, so treat oauth.json on the board as a secret.
+COMMANDCODE_USAGE = "https://api.commandcode.ai/alpha/billing/credits"
+OPENCODE_USAGE = "https://opencode.ai/zen/go/v1/usage"
+
+NAMES = (("claude", "Claude"), ("codex", "Codex"), ("commandcode", "Command Code"),
+         ("opencode", "OpenCode"), ("grok", "Grok"))
+
 def _load():
     try:
         return json.load(open(TOKENS))
@@ -31,7 +44,7 @@ def _save(t):
 
 def connected():
     t = _load()
-    return [name for name in ("claude", "codex") if name in t]
+    return [name for name, _ in NAMES if name in t]
 
 def _q(s):
     return "".join(c if c.isalpha() or c.isdigit() or c in "-_.~" else "%%%02X" % ord(c) for c in s)
@@ -134,12 +147,59 @@ def codex_poll():
     _codex_pending = None
     return True
 
-# --- Reading usage. Access tokens expire (Claude after hours, Codex after days); a 401 swaps the
-# refresh token for new ones, so this never needs the board's clock.
+# --- Grok: same as Codex, the code is entered at accounts.x.ai.
+
+_grok_pending = None        # device_code while waiting for you to enter the code
+
+def grok_start():
+    """(code, page) to show on the remote page."""
+    global _grok_pending
+    status, r = _call("POST", GROK_AUTH + "/device/code", form={
+        "client_id": GROK_ID, "scope": "openid profile email offline_access grok-cli:access"})
+    if status != 200:
+        raise ValueError("xAI said %d" % status)
+    _grok_pending = r["device_code"]
+    return r["user_code"], r.get("verification_uri_complete") or r["verification_uri"]
+
+def grok_poll():
+    """True once the code has been entered (tokens saved); False while still waiting."""
+    global _grok_pending
+    if not _grok_pending:
+        raise ValueError("Tap Connect Grok first.")
+    status, tok = _call("POST", GROK_AUTH + "/token", form={
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code", "device_code": _grok_pending,
+        "client_id": GROK_ID})
+    if tok.get("error") in ("authorization_pending", "slow_down"):
+        return False
+    if status != 200:
+        raise ValueError("xAI said %d: %s" % (status, tok.get("error_description") or tok.get("error") or ""))
+    _keep("grok", tok)
+    _grok_pending = None
+    return True
+
+# --- Command Code / OpenCode Go: just a key.
+
+def save_key(name, key):
+    if name not in ("commandcode", "opencode") or not key.strip():
+        raise ValueError("Paste a key first.")
+    t = _load()
+    t[name] = {"access": key.strip()}
+    _save(t)
+
+# --- Reading usage. Access tokens expire (Claude and Grok after hours, Codex after days); a 401 swaps
+# the refresh token for new ones, so this never needs the board's clock.
 
 def _refresh(t, name):
-    url, cid = (CLAUDE_TOKEN, CLAUDE_ID) if name == "claude" else (CODEX_AUTH + "/oauth/token", CODEX_ID)
-    status, tok = _call("POST", url, body={"grant_type": "refresh_token", "refresh_token": t[name]["refresh"], "client_id": cid})
+    if not t[name].get("refresh"):
+        raise ValueError("key rejected")                       # a pasted key has nothing to refresh
+    grant = {"grant_type": "refresh_token", "refresh_token": t[name]["refresh"]}
+    if name == "grok":                                          # xAI wants a form, the others JSON
+        grant["client_id"] = GROK_ID
+        status, tok = _call("POST", GROK_AUTH + "/token", form=grant)
+    else:
+        url, cid = (CLAUDE_TOKEN, CLAUDE_ID) if name == "claude" else (CODEX_AUTH + "/oauth/token", CODEX_ID)
+        grant["client_id"] = cid
+        status, tok = _call("POST", url, body=grant)
     if status != 200:
         raise ValueError("sign in again")
     _keep(name, tok)
@@ -182,16 +242,19 @@ def _until(stamp):
     if stamp is None:
         return ""
     left = stamp - time.time()
-    return humanize(left) if left < 8 * 86400 else "?"         # way off = clock not set yet
+    return humanize(left) if left < 32 * 86400 else "?"        # way off = clock not set yet
 
 def _at(stamp):
-    """The local clock time of `stamp`: '3pm', '3:30pm', or 'thu 3pm' when it isn't today; '' before NTP."""
+    """The local clock time of `stamp`: '3pm', '3:30pm', 'thu 3pm' when it isn't today, '25 oct' when
+    it's over a week out; '' before NTP."""
     import room
     now = room.local_time()
     if stamp is None or not now:
         return ""
     stamp = int(stamp) + 30                                     # to the nearest minute: 2:59:59 is 3pm
     lt = time.localtime(stamp + room._uk_offset(stamp))
+    if stamp - time.time() >= 8 * 86400:                       # a weekday would be ambiguous
+        return "%d %s" % (lt[2], room.MONTHS[lt[1] - 1])
     at = room.clock(lt[3], lt[4]).replace(":00", "")
     return at if lt[:3] == now[:3] else room.DAYS[lt[6]] + " " + at
 
@@ -221,17 +284,46 @@ def _codex(t):
              "at": _at(time.time() + int(w.get("reset_after_seconds") or 0))}
             for w in (limits.get("primary_window"), limits.get("secondary_window")) if w]
 
+def _windows(*rows):
+    """Window dicts from (label, used %, reset epoch seconds or None) rows."""
+    return [{"label": label, "used": int(round(used or 0)), "resets": _until(stamp), "at": _at(stamp)}
+            for label, used, stamp in rows]
+
+def _commandcode(t):
+    r = _get(t, "commandcode", COMMANDCODE_USAGE, lambda e: {"Authorization": "Bearer " + e["access"]})
+    limits = r.get("windowLimits") or {}
+    rows = []
+    for key, label in (("fiveHour", "5-hr"), ("weekly", "Weekly")):
+        w = limits.get(key)
+        if w and w.get("cap"):                                  # resetAt is 0 until the window starts
+            rows.append((label, 100 * (w.get("used") or 0) / w["cap"], w["resetAt"] / 1000 if w.get("resetAt") else None))
+    return _windows(*rows)
+
+def _opencode(t):
+    r = _get(t, "opencode", OPENCODE_USAGE, lambda e: {"Authorization": "Bearer " + e["access"]})
+    u = r.get("usage") or {}
+    return _windows(*[(label, u[key].get("percent"), _stamp(u[key].get("resetsAt") or ""))
+                      for key, label in (("rolling", "5-hr"), ("weekly", "Weekly"), ("monthly", "Month")) if u.get(key)])
+
+def _grok(t):
+    r = _get(t, "grok", GROK_USAGE, lambda e: {"Authorization": "Bearer " + e["access"], "User-Agent": "grok-cli"})
+    c = r.get("config") or {}
+    kind = (c.get("currentPeriod") or {}).get("type", "")     # USAGE_PERIOD_TYPE_WEEKLY
+    label = {"WEEKLY": "Weekly", "MONTHLY": "Month", "DAILY": "Daily"}.get(kind.split("_")[-1], "Usage")
+    return _windows((label, c.get("creditUsagePercent"), _stamp(c.get("billingPeriodEnd") or "")))
+
 def fetch(previous=None):
     """A snapshot shaped like the relay's ({"providers"}) for dashboard.draw. A provider
     that fails keeps its previous numbers, marked with why."""
     t = _load()
     before = {p.get("name"): p for p in (previous or {}).get("providers", [])}
     cards = []
-    for name, label, read in (("claude", "Claude", _claude), ("codex", "Codex", _codex)):
+    readers = {"claude": _claude, "codex": _codex, "commandcode": _commandcode, "opencode": _opencode, "grok": _grok}
+    for name, label in NAMES:
         if name not in t:
             continue
         try:
-            cards.append({"name": label, "status": "live", "windows": read(t)})
+            cards.append({"name": label, "status": "live", "windows": readers[name](t)})
         except Exception as e:
             print("usage %s: %s" % (name, e))
             cards.append({"name": label, "status": str(e)[:20], "windows": before.get(label, {}).get("windows", [])})
