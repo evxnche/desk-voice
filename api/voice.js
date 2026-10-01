@@ -707,8 +707,14 @@ export async function POST(request) {
     const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const at = new RegExp(`\\b(?:${words})(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
     console.log('wake:', wake, '| transcript:', heard, '| match:', Boolean(at));
-    if (!at || !heard.slice(at.index + at[0].length).trim()) return ignored(heard);
+    if (!at) return ignored(heard);
     heard = heard.slice(at.index + at[0].length);
+    if (!heard.trim()) {
+      // Just "gee gee", then a pause for the board to respond: ask, and the board listens for the
+      // question without the wake phrase (its reply window). Dropping these lost 2 of 3 real tries.
+      const text = 'Yes?';
+      return reply('', text, await speak(text), adpcm);
+    }
   }
   if (!heard.trim()) {
     const text = "Sorry, I didn't catch that.";
