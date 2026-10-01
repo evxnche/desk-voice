@@ -1,5 +1,5 @@
 from machine import Pin, SPI
-import rlcd, battery, palicon, bitfont, font5
+import rlcd, battery, palicon, font5
 
 W, H = 400, 300
 _display = None
@@ -55,21 +55,29 @@ def draw(data, footer=""):
     header(d, "limits")
     palicon.draw(d.canvas, 360, 28, "limits")
 
-    y = 40
-    for p in data.get("providers", [])[:2]:
+    # Compact rows so six providers fit: name, then one line per window (label, bar, %, reset).
+    # Text stops short of x=358 so it never runs under the Pal icon.
+    y = 30
+    for p in data.get("providers", []):
+        windows = p.get("windows", [])[:2]
+        if y + 12 + 13 * len(windows) > H - 14:   # keep clear of the footer bar
+            break
         name = ascii(p.get("name", "?"))
         if p.get("status", "live") != "live":
             name += " (" + ascii(p["status"]) + ")"
-        bitfont.get("font_mid").text(d.canvas, name.lower(), 10, y)
-        y += 22
-        for win in p.get("windows", [])[:2]:
+        d.text(name.lower(), 10, y, 1)
+        y += 12
+        for win in windows:
             used = int(win.get("used", 0))
-            d.text(ascii(win.get("label", ""))[:6], 10, y + 6, 1)
-            bar(d, 70, y, 242, 20, used)
-            d.text_large(("%d%%" % used), 322, y + 2, 2)
-            d.text("resets " + ascii(win.get("resets", "?")), 70, y + 24, 1)
-            y += 40
-        y += 8
+            font5.text(d.canvas, ascii(win.get("label", ""))[:6], 10, y + 1)
+            bar(d, 50, y, 100, 9, used)
+            d.text("%d%%" % used, 156, y + 1, 1)
+            resets = "resets " + ascii(win.get("resets", "?"))
+            if win.get("at"):
+                resets += " (" + ascii(win["at"]) + ")"
+            font5.text(d.canvas, resets[:27], 196, y + 1)
+            y += 13
+        y += 4
 
     if footer:
         d.fill_rect(0, H - 14, W, 14, 1)

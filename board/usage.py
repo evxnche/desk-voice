@@ -169,17 +169,31 @@ def humanize(seconds):
         return "%dh %dm" % (hours, minutes) if minutes else "%dh" % hours
     return "%dm" % minutes
 
-def _until(iso):
-    """Time left until an ISO UTC timestamp ('2026-09-27T18:00:00.12+00:00'); needs the NTP clock."""
-    if not iso:
-        return ""
+def _stamp(iso):
+    """Epoch seconds for an ISO UTC timestamp ('2026-09-27T18:00:00.12+00:00'), or None."""
     try:
         d, t = iso[:19].split("T")
-        stamp = time.mktime(tuple(int(x) for x in d.split("-")) + tuple(int(x) for x in t.split(":")) + (0, 0))
+        return time.mktime(tuple(int(x) for x in d.split("-")) + tuple(int(x) for x in t.split(":")) + (0, 0))
     except Exception:
+        return None
+
+def _until(stamp):
+    """Time left until `stamp`; needs the NTP clock."""
+    if stamp is None:
         return ""
     left = stamp - time.time()
     return humanize(left) if left < 8 * 86400 else "?"         # way off = clock not set yet
+
+def _at(stamp):
+    """The local clock time of `stamp`: '3pm', '3:30pm', or 'thu 3pm' when it isn't today; '' before NTP."""
+    import room
+    now = room.local_time()
+    if stamp is None or not now:
+        return ""
+    stamp = int(stamp) + 30                                     # to the nearest minute: 2:59:59 is 3pm
+    lt = time.localtime(stamp + room._uk_offset(stamp))
+    at = room.clock(lt[3], lt[4]).replace(":00", "")
+    return at if lt[:3] == now[:3] else room.DAYS[lt[6]] + " " + at
 
 def _label(seconds):
     seconds = int(seconds or 0)
@@ -190,15 +204,21 @@ def _label(seconds):
 def _claude(t):
     r = _get(t, "claude", CLAUDE_USAGE, lambda e: {
         "Authorization": "Bearer " + e["access"], "anthropic-beta": "oauth-2025-04-20"})
-    return [{"label": label, "used": int(round(r[key].get("utilization") or 0)), "resets": _until(r[key].get("resets_at"))}
-            for key, label in (("five_hour", "5-hr"), ("seven_day", "Weekly")) if r.get(key)]
+    windows = []
+    for key, label in (("five_hour", "5-hr"), ("seven_day", "Weekly")):
+        if r.get(key):
+            stamp = _stamp(r[key].get("resets_at") or "")
+            windows.append({"label": label, "used": int(round(r[key].get("utilization") or 0)),
+                            "resets": _until(stamp), "at": _at(stamp)})
+    return windows
 
 def _codex(t):
     r = _get(t, "codex", CODEX_USAGE, lambda e: {
         "Authorization": "Bearer " + e["access"], "ChatGPT-Account-Id": e.get("account") or "", "User-Agent": "codex-cli"})
     limits = r.get("rate_limit") or {}
     return [{"label": _label(w.get("limit_window_seconds")), "used": int(w.get("used_percent") or 0),
-             "resets": humanize(w.get("reset_after_seconds"))}
+             "resets": humanize(w.get("reset_after_seconds")),
+             "at": _at(time.time() + int(w.get("reset_after_seconds") or 0))}
             for w in (limits.get("primary_window"), limits.get("secondary_window")) if w]
 
 def fetch(previous=None):
