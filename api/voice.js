@@ -840,6 +840,7 @@ export async function POST(request) {
     console.error(e);
   }
   ms.chat = Date.now() - tChat;
+  console.log('said:', text);
   // A zoom alone keeps whatever centre the board had: automatic (home) or a named place.
   const atHome = changes.home ?? !centre.custom;
   const radar = !changes.set ? null
