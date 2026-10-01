@@ -447,7 +447,7 @@ export function reply(heard, text, pcm, adpcm, radar = null, board = [], extra =
 // How the transcriber may write a wake phrase, when it's not always spelled as said.
 const WAKE_SPELLINGS = {
   'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g',   // "Gigi", "gee gee", "GG", "G.G.", "G-G"
-  ava: 'ava|eva|avah',                             // "Ava", and "Eva" when it hears an E
+  'hey ava': '(?:(?:hey|hi|hay|a)[ ,.!-]*)?(?:ava|eva|avah)',   // "Hey Ava", "Hi Eva", or just "Ava"
 };
 const ANY_WAKE = Object.values(WAKE_SPELLINGS).join('|');
 
@@ -641,7 +641,7 @@ const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|
 
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
 const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
-  'with its wake word "Ava".';
+  'with its wake word "Hey Ava".';
 
 // The board calls this the moment you start talking, so a function that had gone cold (~0.6-0.9 s to
 // start) is warm by the time the question arrives.

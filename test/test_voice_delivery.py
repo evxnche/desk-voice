@@ -17,7 +17,7 @@ class VoiceDeliveryTests(unittest.TestCase):
         modules["secrets"].VOICE_URL = "https://example.test/api/voice"
         modules["secrets"].VOICE_KEY = "test"
         modules["audio"].TX_BUF = 32000
-        modules["audio"].starved = 0
+        modules["audio"].starved = []
         self.patch = patch.dict(sys.modules, modules)
         self.patch.start()
         path = os.path.join(os.path.dirname(__file__), "..", "board", "voice.py")
@@ -178,4 +178,4 @@ class VoiceDeliveryTests(unittest.TestCase):
 
         self.assertTrue(ns["play"](chunks(), mono=True, between=lambda: advance(80)))
         self.assertEqual(gaps, [], "screen updates delayed the next audio chunk beyond its playback time")
-        self.assertEqual(ns["starved"], 0)
+        self.assertEqual(ns["starved"], [])

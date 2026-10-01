@@ -478,7 +478,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         between = (lambda: (tick(True), face.mouth())) if face.keep else face.mouth
         ended = _speak(face.voiced(sound), back, tapped, between)
         if audio.starved:
-            print("voice: speaker ran dry %d time(s)" % audio.starved)
+            print("voice: speaker ran dry (chunk, ms):", audio.starved)
         if ended != "done" and stream:
             stream.quit = True
         if ended == "back":

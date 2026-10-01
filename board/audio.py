@@ -11,7 +11,7 @@ try:
 except ImportError:
     wake = None
 
-WAKE_PHRASES = ["ava"]      # any English phrase works; longer ones wake it by accident less often
+WAKE_PHRASES = ["hey ava"]  # any English phrase works; "ava" alone was heard 2 times in 25, "hey ava" 20 in 24
 
 RATE = 15625
 MCLK_HZ = RATE * 256
@@ -155,7 +155,7 @@ def woke():
     return wake.heard() if wake else None
 
 TX_BUF = 32000     # speaker buffer: ~1 s of mono voice, slack for screen redraws and download turns
-starved = 0        # times the last play() found the speaker buffer already empty (a gap you'd hear)
+starved = []       # gaps in the last play(): (chunk number, ms the speaker sat empty)
 
 # Speaker volume 0 (silent) - 10, saved on the board; 7 plays each sound at the loudness it was tuned
 # at, and each step is 3 dB (the ES8311's volume register moves 0.5 dB per unit).
@@ -183,13 +183,14 @@ def play(buf, volume=0xD0, mono=False, stop=None, between=None):
     `between()` (keeping a screen up to date) runs after each 4 KB chunk, followed by a short
     sleep so other threads (screen fetches) run too. The buffer holds ~1 s of mono, so a chunk's
     between() plus waiting for audio may take up to ~0.8 s before you'd hear a gap.
-    `starved` counts writes that found the buffer already empty."""
+    `starved` lists the gaps: chunks that came after everything queued had played (allowing for the
+    ~50 ms the I2S DMA buffers add)."""
     global starved
     out = _i2s(I2S.TX, DOUT, I2S.MONO if mono else I2S.STEREO, TX_BUF)
     _es8311_init(_volume_reg(volume))
     pa(1)
     finished = True
-    starved, queued, t0, per_ms = 0, 0, None, RATE * (2 if mono else 4) / 1000
+    starved, queued, t0, per_ms, n = [], 0, None, RATE * (2 if mono else 4) / 1000, 0
     try:
         if isinstance(buf, (bytes, bytearray, memoryview)):
             mv = memoryview(buf)
@@ -201,11 +202,14 @@ def play(buf, volume=0xD0, mono=False, stop=None, between=None):
             now = time.ticks_ms()
             if t0 is None:
                 t0 = now
-            elif time.ticks_diff(now, t0) > queued / per_ms + 20:
-                starved += 1                      # everything queued had played before this chunk
-                t0, queued = now, 0               # a gap: time restarts from here
+            else:
+                late = time.ticks_diff(now, t0) - queued / per_ms - 50
+                if late > 0:                      # everything queued had played before this chunk
+                    starved.append((n, int(late)))
+                    t0, queued = now, 0           # a gap: time restarts from here
             out.write(chunk)
             queued += len(chunk)
+            n += 1
             if between:
                 between()
                 time.sleep_ms(5)                  # yield without starving the speaker during screen draws
