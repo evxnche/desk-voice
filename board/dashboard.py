@@ -1,5 +1,5 @@
 from machine import Pin, SPI
-import rlcd, battery, palicon, font5
+import rlcd, battery, font5
 
 W, H = 400, 300
 _display = None
@@ -53,10 +53,8 @@ def draw(data, footer=""):
     d = display()
     d.clear(0)
     header(d, "limits")
-    palicon.draw(d.canvas, 360, 28, "limits")
 
     # Compact rows so six providers fit: name, then one line per window (label, bar, %, reset).
-    # Text stops short of x=358 so it never runs under the Pal icon.
     y = 30
     for p in data.get("providers", []):
         windows = p.get("windows", [])[:3]
