@@ -229,6 +229,9 @@ def humanize(seconds):
         return "%dh %dm" % (hours, minutes) if minutes else "%dh" % hours
     return "%dm" % minutes
 
+# Seconds from 1970 to the board's epoch: the ESP32 counts from 2000, a Mac from 1970.
+_UNIX = 946684800 if time.localtime(0)[0] == 2000 else 0
+
 def _stamp(iso):
     """Epoch seconds for an ISO UTC timestamp ('2026-09-27T18:00:00.12+00:00'), or None."""
     try:
@@ -296,7 +299,7 @@ def _commandcode(t):
     for key, label in (("fiveHour", "5-hr"), ("weekly", "Weekly")):
         w = limits.get(key)
         if w and w.get("cap"):                                  # resetAt is 0 until the window starts
-            rows.append((label, 100 * (w.get("used") or 0) / w["cap"], w["resetAt"] / 1000 if w.get("resetAt") else None))
+            rows.append((label, 100 * (w.get("used") or 0) / w["cap"], w["resetAt"] / 1000 - _UNIX if w.get("resetAt") else None))
     return _windows(*rows)
 
 def _opencode(t):
