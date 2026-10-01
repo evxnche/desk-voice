@@ -258,6 +258,9 @@ function offer(history) {
 }
 
 // Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
+// What the model writes when told to add something it wasn't told ("add a task" -> "New task").
+const PLACEHOLDER = /^(a |an |the |my |another )?(new |untitled |another )?(task|to-?do|item|thing|project|idea)s?$/i;
+
 export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert: null }) {
   const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
     pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music', tracker: 'track',
@@ -295,10 +298,14 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
     }),
     update_tasks: tool({
       description: "Change the owner's task list on the gadget: add a task, mark one done (or not done), remove one, " +
-        'or clear the finished ones. For done/undo/remove copy the task text from the device context.',
+        'or clear the finished ones. For done/undo/remove copy the task text from the device context. ' +
+        "Never make up a task: if the owner didn't say what it is, leave text out and ask them.",
       inputSchema: jsonSchema({
         type: 'object',
-        properties: { action: { type: 'string', enum: ['add', 'done', 'undo', 'remove', 'clear_done'] }, text: { type: 'string' } },
+        properties: {
+          action: { type: 'string', enum: ['add', 'done', 'undo', 'remove', 'clear_done'] },
+          text: { type: 'string', description: "The task in the owner's words; left out when they didn't say it" },
+        },
         required: ['action'],
         additionalProperties: false,
       }),
@@ -306,7 +313,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         const plan = deviceContext.plan || { todo: [], done: [], projects: [] };
         if (action === 'clear_done') { cmds.push({ do: 'tasks_clear_done' }); return { ok: true }; }
         const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-        if (!clean) return { ok: false, error: 'Say which task' };
+        if (!clean || PLACEHOLDER.test(clean)) return { ok: false, error: 'No task given: ask the owner what it is' };
         if (action === 'add') { cmds.push({ do: 'task_add', text: clean }); return { ok: true, added: clean }; }
         const match = matchItem(action === 'undo' ? plan.done : [...plan.todo, ...plan.done], clean);
         if (!match) return { ok: false, error: 'No task like that on the list', tasks: plan.todo };
@@ -316,7 +323,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
     }),
     update_project: tool({
       description: "Add a project to the owner's project pipeline, move it to another stage (idea, building, testing, shipped) " +
-        'or remove it.',
+        "or remove it. Never make up a project name: if the owner didn't say it, ask them.",
       inputSchema: jsonSchema({
         type: 'object',
         properties: { action: { type: 'string', enum: ['set', 'remove'] }, name: { type: 'string' }, stage: { type: 'string', enum: STAGES } },
@@ -332,7 +339,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
           cmds.push({ do: 'project_remove', name: match });
           return { ok: true, removed: match };
         }
-        if (!clean) return { ok: false, error: 'Say which project' };
+        if (!clean || PLACEHOLDER.test(clean)) return { ok: false, error: 'No project given: ask the owner which one' };
         cmds.push({ do: 'project', name: match || clean, stage: stage || 'idea' });
         return { ok: true, project: match || clean, stage: stage || 'idea' };
       },

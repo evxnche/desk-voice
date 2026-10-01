@@ -151,3 +151,16 @@ test('agent limits questions open the limits screen even without show_screen', (
   applyBoardBackstops("What's the speed limit on a motorway?", null, speed, { radius: 20 }, {}, []);
   assert.deepEqual(speed, []);
 });
+
+test('"add a task" with no task asks instead of adding a made-up one', async () => {
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null, plan: { todo: [], done: [], projects: [] } });
+  for (const text of [undefined, '', 'New task', 'a task', 'task', 'new to-do']) {
+    const r = await tools.update_tasks.execute({ action: 'add', text });
+    assert.equal(r.ok, false, String(text));
+    assert.match(r.error, /ask/);
+  }
+  assert.equal((await tools.update_project.execute({ action: 'set', name: 'New project' })).ok, false);
+  assert.equal((await tools.update_tasks.execute({ action: 'add', text: 'new task list design' })).ok, true);
+  assert.deepEqual(commands, [{ do: 'task_add', text: 'new task list design' }]);
+});
