@@ -5,7 +5,7 @@
 # hours: the screen keeps the last position it saw.
 import time, json, requests, _thread, math, framebuf
 from array import array
-import dashboard, battery, font5, secrets, room, flights, palicon
+import dashboard, font5, secrets, room, flights, palicon
 
 URL = secrets.VOICE_URL.replace("/api/voice", "/api/track") + "?k=" + secrets.VOICE_KEY
 MAP_URL = secrets.VOICE_URL.replace("/api/voice", "/api/trackmap") + "?k=" + secrets.VOICE_KEY
@@ -254,24 +254,15 @@ def _draw_static(d):
     d.clear(0)
     head = info or last or {}
     name = head.get("flight") or flight or "no flight"
-    font5.lowercase = not flight               # flight numbers and airport codes in capitals
-    d.text_large(dashboard.ascii(name)[:8], 10, 8, 2)
     a, b = head.get("from") or {}, head.get("to") or {}
     route = "%s > %s" % (a.get("code") or "?", b.get("code") or "?") if a or b else ""
+    font5.lowercase = not flight               # flight numbers and airport codes in capitals
+    dashboard.header(d, name, route or head.get("airline") or "")
     font5.lowercase = True
-    x = 20 + 16 * min(8, len(name))
-    if head.get("airline"):
-        x = font5.text(c, dashboard.ascii(head["airline"])[:20], x, 13) + 12
-    if route:
-        font5.lowercase = False
-        font5.text(c, dashboard.ascii(route), x, 13)
-        font5.lowercase = True
-    battery.draw_small(d, 392, 13)
-    d.line(0, 32, 400, 32, 1)
 
     if not flight:
         d.text_large("no flight tracked", 16, 110, 2)
-        d.text("say \"hey ava, track BA36\"", 16, 150, 1)
+        d.text("say \"gee gee, track BA36\"", 16, 150, 1)
         d.text("or use deskpal.local", 16, 166, 1)
         return
 

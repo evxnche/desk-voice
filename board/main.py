@@ -157,7 +157,7 @@ def key_tapped():
 def converse(result, opened=lambda: False):
     """After an answer, or a KEY tap that cut one short: keep listening for replies (no wake phrase)
     until none comes. Once an answer opened a screen (limits, weather, radar, music...) the rest of
-    the conversation stays on it, with the little corner Pal; otherwise it's the full-screen Pal.
+    the conversation stays on it, with the little Pal in its header; otherwise it's the full-screen Pal.
     `opened()`: has this conversation opened a screen yet. Returns the last result and whether it did."""
     while isinstance(result, dict) or result == "interrupt":
         result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=opened(),
@@ -512,6 +512,15 @@ def tick_screen(speaking=False):
         tracker.frame()
     if screen == "plan":
         plan.frame()
+    if screen in ("limits", "track"):            # the only screens not redrawn each minute: keep the header clock right
+        lt = room.local_time()
+        if lt and lt[4] != shown_minute:
+            if shown_minute is not None:
+                if screen == "limits":
+                    show_limits(footer)
+                else:
+                    tracker.enter()
+            shown_minute = lt[4]
 
 next_wifi_try = 0
 web = webserver.Server()

@@ -1,5 +1,5 @@
 from machine import Pin, SPI
-import rlcd, battery, palicon
+import rlcd, battery, palicon, bitfont, font5
 
 W, H = 400, 300
 _display = None
@@ -31,30 +31,45 @@ def bar(d, x, y, w, h, pct):
     if fill:
         d.fill_rect(x + 2, y + 2, fill, h - 4, 1)
 
+def header(d, title, extra=""):
+    """The header every screen shares, on a 24 px bar: title, date and time at the same places, `extra`
+    (small, up to 14 chars) right before the battery. The title and extra keep the caller's case; the
+    date and time are always lowercase."""
+    import room                      # room imports this module
+    d.text(ascii(title)[:9], 10, 9, 1)
+    if extra:
+        extra = ascii(extra)[:14]
+        font5.text(d.canvas, extra, 338 - 6 * len(extra), 10)
+    case, font5.lowercase = font5.lowercase, True
+    lt = room.local_time()
+    if lt:
+        d.text("%s %d %s" % (room.DAYS[lt[6]], lt[2], room.MONTHS[lt[1] - 1]), 98, 9, 1)
+        d.text(room.clock(lt[3], lt[4]), 186, 9, 1)
+    font5.lowercase = case
+    battery.draw_small(d, 392, 10)
+    d.line(0, 24, W, 24, 1)
+
 def draw(data, footer=""):
     d = display()
     d.clear(0)
-    d.text_large("AGENT LIMITS", 10, 8, 2)
-    palicon.draw(d.canvas, 240, 5, "limits")
-    battery.draw(d, 392, 8)
-    d.text(ascii(data.get("subtitle", "")), 10, 30, 1)
-    d.line(0, 42, W, 42, 1)
+    header(d, "limits")
+    palicon.draw(d.canvas, 360, 28, "limits")
 
-    y = 52
+    y = 40
     for p in data.get("providers", [])[:2]:
         name = ascii(p.get("name", "?"))
         if p.get("status", "live") != "live":
             name += " (" + ascii(p["status"]) + ")"
-        d.text_large(name, 10, y, 2)
-        y += 24
+        bitfont.get("font_mid").text(d.canvas, name.lower(), 10, y)
+        y += 22
         for win in p.get("windows", [])[:2]:
             used = int(win.get("used", 0))
-            d.text_large(ascii(win.get("label", ""))[:6], 10, y + 2, 2)
-            bar(d, 112, y, 200, 20, used)
+            d.text(ascii(win.get("label", ""))[:6], 10, y + 6, 1)
+            bar(d, 70, y, 242, 20, used)
             d.text_large(("%d%%" % used), 322, y + 2, 2)
-            d.text("resets " + ascii(win.get("resets", "?")), 112, y + 24, 1)
-            y += 38
-        y += 6
+            d.text("resets " + ascii(win.get("resets", "?")), 70, y + 24, 1)
+            y += 40
+        y += 8
 
     if footer:
         d.fill_rect(0, H - 14, W, 14, 1)

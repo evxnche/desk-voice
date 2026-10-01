@@ -145,12 +145,13 @@ def _draw_static():
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
-    d.text_large("FLIGHTS", 10, 8, 2)
+    label = ""
     if last:
         n = len(last["aircraft"])
-        label = dashboard.ascii("%d plane%s near %s" % (n, "" if n == 1 else "s", last.get("place", "") or "you"))[:36]
-        font5.text(c, label, 394 - 6 * len(label), 13)
-    d.line(0, 32, 400, 32, 1)
+        label = "%d plane%s" % (n, "" if n == 1 else "s")
+        near = "%s near %s" % (label, last.get("place", "") or "you")
+        label = near if len(near) <= 14 else label
+    dashboard.header(d, "flights", label)
 
     for rr in (R, R // 2):
         c.ellipse(CX, CY, rr, rr, 1)

@@ -3,7 +3,7 @@
 # UK local time from NTP, weather from desk-voice /api/weather (Open-Meteo).
 import time, requests, _thread, math
 from array import array
-import dashboard, battery, font5, secrets, home, palicon
+import dashboard, font5, secrets, home, palicon
 
 WEATHER_URL = secrets.VOICE_URL.replace("/api/voice", "/api/weather") + "?k=" + secrets.VOICE_KEY
 WEATHER_MS = 10 * 60 * 1000
@@ -189,10 +189,7 @@ def _row(d, label, value, y):
 def _draw_static(d, lt):
     c = d.canvas
     d.clear(0)
-    if lt:
-        d.text("%s %d %s   %s" % (DAYS[lt[6]], lt[2], MONTHS[lt[1] - 1], clock(lt[3], lt[4])), 10, 9, 1)
-    battery.draw_small(d, 392, 9)
-    d.line(0, 24, 400, 24, 1)
+    dashboard.header(d, "weather")
     w = weather
     if not w:
         d.text_large("weather loading...", 16, 130, 2)
@@ -200,25 +197,21 @@ def _draw_static(d, lt):
     place = dashboard.ascii(w.get("place", "") or "here")
     d.text(place[:22], 216, 34, 1)
     temp = "%d" % w["temp_c"]
-    d.text_large(temp, 214, 52, 6)
-    x = 214 + 48 * len(temp)
-    _degrees(c, x + 2, 54, 5)
-    d.text_large("c", x + 16, 54, 3)
-    cond = dashboard.ascii(w["condition"])
-    if len(cond) <= 11:
-        d.text_large(cond, 216, 106, 2)
-    else:
-        d.text(cond[:22], 216, 110, 1)          # "partly cloudy", "thunderstorm, hail"
+    d.text_large(temp, 214, 56, 5)
+    x = 214 + 40 * len(temp)
+    _degrees(c, x + 2, 57, 4)
+    d.text_large("c", x + 14, 57, 2)
+    d.text(dashboard.ascii(w["condition"])[:22], 216, 110, 1)   # "partly cloudy", "thunderstorm, hail"
     _row(d, "feels", "%dc" % w["feels_c"], 134)
     _row(d, "humidity", "%d%%" % w["humidity"], 152)
     _row(d, "wind", "%d km/h" % w["wind_kmh"], 170)
     c.hline(10, 200, 380, 1)
     for i, (name, day) in enumerate((("today", w["today"]), ("tomorrow", w["tomorrow"]))):
         y = 214 + 40 * i
-        d.text_large(name, 12, y, 2)
-        font5.text(c, dashboard.ascii(day["condition"])[:20], 160, y + 3)
+        d.text(name, 12, y + 2, 1)
+        font5.text(c, dashboard.ascii(day["condition"])[:20], 110, y + 3)
         d.text("%d-%dc" % (day["low_c"], day["high_c"]), 290, y + 2, 1)
-        font5.text(c, "rain %d%%" % day["rain_chance"], 160, y + 17)
+        font5.text(c, "rain %d%%" % day["rain_chance"], 110, y + 17)
     palicon.draw(c, 366, 212, "today")
 
 def frame():

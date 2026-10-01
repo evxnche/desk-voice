@@ -3,7 +3,7 @@
 # changed by voice ("gee gee, add call the bank to my tasks", "move ezwrite to testing") and on
 # deskpal.local.
 import json, binascii
-import dashboard, font5, room, schedule, battery
+import dashboard, font5, room, schedule
 
 FILE = "plan.json"
 STAGES = ("idea", "building", "testing", "shipped")
@@ -126,24 +126,30 @@ def frame():
     """Call often while the screen shows: redraws when the plan, the calendar or the minute changes."""
     global _shown
     lt = room.local_time()
-    key = (version, lt and lt[4], schedule.status(), len(schedule.tomorrow))
+    key = (version, lt and lt[4], schedule.status(), len(schedule.upcoming))
     if key != _shown:
         _shown = key
         draw(lt)
 
+def _when(e):
+    return "all day" if e.get("all_day") else room.clock(e["s"] // 60, e["s"] % 60)
+
 def _event_lines(lt):
-    """(time, title) rows for the calendar column: what's left of today, then tomorrow."""
+    """Rows for the calendar column: (day label,) or (time, title). Today's date and what's left of
+    today (or "no events today"), then the next events coming up, under their day."""
     now = lt[3] * 60 + lt[4] if lt else 0
-    rows = []
+    rows = [("%s %d %s" % (room.DAYS[lt[6]], lt[2], room.MONTHS[lt[1] - 1]) if lt else "today",)]
     left = [e for e in schedule.today if e.get("all_day") or e["e"] > now]
     for e in left:
-        rows.append(("all day" if e.get("all_day") else room.clock(e["s"] // 60, e["s"] % 60), e["t"]))
+        rows.append((_when(e), e["t"]))
     if not left:
-        rows.append(("", "nothing else today"))
-    if schedule.tomorrow:
-        rows.append(None)                 # "tomorrow" label
-        for e in schedule.tomorrow:
-            rows.append(("all day" if e.get("all_day") else room.clock(e["s"] // 60, e["s"] % 60), e["t"]))
+        rows.append(("", "no events today"))
+    day = None
+    for e in schedule.upcoming:
+        if e["day"] != day:
+            day = e["day"]
+            rows.append((day,))
+        rows.append((_when(e), e["t"]))
     return rows
 
 def draw(lt=None):
@@ -151,10 +157,7 @@ def draw(lt=None):
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
-    d.text("plan   %s %d %s   %s" % (room.DAYS[lt[6]], lt[2], room.MONTHS[lt[1] - 1], room.clock(lt[3], lt[4]))
-           if lt else "plan", 10, 9, 1)
-    battery.draw_small(d, 392, 9)
-    d.line(0, 24, 400, 24, 1)
+    dashboard.header(d, "plan")
 
     # To do (left)
     todo = [t for t in tasks if not t["done"]]
@@ -182,8 +185,8 @@ def draw(lt=None):
         for row in _event_lines(lt):
             if y > 178:
                 break
-            if row is None:
-                font5.text(c, "tomorrow", 210, y + 4)
+            if len(row) == 1:
+                font5.text(c, row[0], 210, y + 4)
                 y += 16
                 continue
             font5.text(c, row[0], 210, y + 2)

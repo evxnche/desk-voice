@@ -1,4 +1,4 @@
-// Today's and tomorrow's calendar for the board (companion.py: meeting heads-ups, when to offer a
+// Today's, tomorrow's and the next upcoming calendar events for the board (companion.py: meeting heads-ups, when to offer a
 // focus session). GET ?k=VOICE_KEY with X-Calendar: the private iCal links, space-separated.
 import { getCalendars } from '../lib/calendar.js';
 
@@ -14,7 +14,7 @@ export async function GET(request) {
     return new Response(String(e.message), { status: 502 });
   }
   // Short titles: the board only has a few KB to spare and a 50-character line.
-  for (const list of [data.today, data.tomorrow]) for (const ev of list) ev.t = ev.t.slice(0, 60);
+  for (const list of [data.today, data.tomorrow, data.upcoming]) for (const ev of list) ev.t = ev.t.slice(0, 60);
   const body = Buffer.from(JSON.stringify(data));
   return new Response(body, {
     headers: { 'Content-Type': 'application/json', 'Content-Length': String(body.length) },

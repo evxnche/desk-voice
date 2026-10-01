@@ -1,7 +1,7 @@
 # The owner's calendars (private iCal links pasted on deskpal.local), for companion.py: heads-ups
 # before meetings, and whether there's time for a focus session; plan.py lists them. desk-voice
 # /api/calendar reads the links (sent space-separated as X-Calendar) and returns today's and
-# tomorrow's events from all of them, merged, in UK time.
+# tomorrow's events from all of them, merged, in UK time, plus the next few events after today.
 import time, json, requests, _thread
 import secrets
 
@@ -14,6 +14,7 @@ links = []
 link = ""           # the X-Calendar value: all the links, space-separated ("" = none)
 today = []          # [{"s": start min, "e": end min, "t": title[, "all_day": True]}], UK time
 tomorrow = []
+upcoming = []       # [{"day": "Tomorrow" | "Fri 3 Oct", "s": start min, "t": title[, "all_day": True]}]
 error = ""
 _day = None         # day of month `today` is for
 _fetch_at = 0
@@ -28,8 +29,8 @@ except Exception:
     pass
 
 def _save():
-    global link, today, tomorrow, _fetch_at, error
-    link, today, tomorrow, error = " ".join(links), [], [], ""
+    global link, today, tomorrow, upcoming, _fetch_at, error
+    link, today, tomorrow, upcoming, error = " ".join(links), [], [], [], ""
     _fetch_at = 0
     with open(FILE, "w") as f:
         json.dump({"ics": links}, f)
@@ -59,12 +60,12 @@ def headers():
     return {"X-Calendar": link} if link else {}
 
 def _worker(day):
-    global today, tomorrow, error, _day, _busy
+    global today, tomorrow, upcoming, error, _day, _busy
     try:
         r = requests.get(URL, headers={"X-Calendar": link}, timeout=15)
         if r.status_code == 200:
             d = r.json()
-            today, tomorrow, _day = d["today"], d["tomorrow"], day
+            today, tomorrow, upcoming, _day = d["today"], d["tomorrow"], d.get("upcoming", []), day
             error = "%d calendar(s) failed" % d["failed"] if d.get("failed") else ""
         else:
             error = "calendar error %d" % r.status_code

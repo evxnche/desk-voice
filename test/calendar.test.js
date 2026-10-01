@@ -66,6 +66,25 @@ test('today and tomorrow in London time, recurring, cancelled and all-day handle
   }
 });
 
+test('upcoming: the next events after today, soonest first, even with none today', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(ICS);
+  try {
+    // Thursday 1 Oct: nothing today; Monday's sync repeats weekly, so the next ones come up
+    const cal = await getCalendar('webcal://example.com/basic.ics', new Date('2026-10-01T09:00:00Z'));
+    assert.deepEqual(cal.today, []);
+    assert.deepEqual(cal.upcoming.slice(0, 2), [
+      { day: 'Mon 5 Oct', date: '2026-10-05', s: 14 * 60, t: 'Team sync' },
+      { day: 'Mon 12 Oct', date: '2026-10-12', s: 14 * 60, t: 'Team sync' },
+    ]);
+    const sunday = await getCalendar('webcal://example.com/basic.ics', new Date('2026-09-27T09:00:00Z'));
+    assert.deepEqual(sunday.upcoming.slice(0, 3).map((e) => [e.day, e.t]),
+      [['Tomorrow', 'Team sync'], ['Tomorrow', 'Dentist'], ['Tue 29 Sep', 'Cousins visiting']]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('only https (or webcal) links', () => {
   assert.equal(validUrl('http://x.com/a.ics'), '');
   assert.equal(validUrl('nonsense'), '');

@@ -29,6 +29,7 @@ class Canvas:
 class Display:
     def __init__(self):
         self.canvas = Canvas()
+        self.canvas_buffer = bytearray(400 * 300 // 8)
         self.texts = []
 
     def text(self, value, x, y, color=1):
@@ -51,8 +52,10 @@ def load_pal():
     room.weather = {"temp_c": 16, "condition": "Cloudy"}
     room.clock = lambda h, m: "%d:%02d%s" % ((h % 24 - 1) % 12 + 1, m, "am" if h % 24 < 12 else "pm")
     audio = types.ModuleType("audio")
-    old = {name: sys.modules.get(name) for name in ("dashboard", "room", "audio", "pal")}
-    sys.modules.update(dashboard=dashboard, room=room, audio=audio)
+    font5 = types.ModuleType("font5")
+    font5.text = lambda fb, s, x, y: display.texts.append((s, x, y, 0, 1))
+    old = {name: sys.modules.get(name) for name in ("dashboard", "room", "audio", "font5", "pal")}
+    sys.modules.update(dashboard=dashboard, room=room, audio=audio, font5=font5)
     try:
         sys.path.insert(0, "board")
         sys.modules.pop("pal", None)
@@ -119,19 +122,27 @@ class PalScreenTests(unittest.TestCase):
         self.assertEqual("".join(lines), word)
         self.assertTrue(all(len(line) <= 23 for line in lines))
 
-    def test_reply_cue_on_full_screen_and_corner_pal_over_a_screen(self):
+    def test_reply_cue_on_full_screen_and_header_pal_over_a_screen(self):
         pal, display = load_pal()
         pal.draw("waiting", 0.5, t=0)
         self.assertIn("SAY YOUR REPLY", [text for text, *_ in display.texts])
         self.assertTrue(any(w > 0 and y >= 286 for _, y, w, _, _ in display.canvas.ops))
+        buf = display.canvas_buffer
+        buf[24 * 50:25 * 50] = b"\xff" * 50          # the header rule
+        for y in range(4, 20):                       # header text on the right half (x 200-399)
+            buf[y * 50 + 25:y * 50 + 50] = b"\x01" * 25
         for mood, label in (("wait", "your turn"), ("listen", "listening"), ("think", "thinking"), ("talk", "talking")):
             display.texts.clear()
             display.canvas.ops.clear()
-            pal.corner(mood, level=0.5, left=0.5, bars=[0.5] * 20, t=0)
+            pal.header(mood, level=0.5, left=0.5, t=0)
             self.assertEqual([label], [text for text, *_ in display.texts])
-            # everything stays inside the corner box, so the screen underneath keeps showing
-            self.assertTrue(all(x >= pal.CX and y >= pal.CY - 5 and x + w <= 400 and y + h <= 300
-                                for x, y, w, h, _ in display.canvas.ops))
+            # only in the header, and only where nothing was drawn, so no text is covered
+            self.assertTrue(all(x + w <= 192 and y + h <= 24 for x, y, w, h, _ in display.canvas.ops))
+        for y in range(4, 20):                       # a header with no room: nothing drawn
+            buf[y * 50:y * 50 + 50] = b"\x01" * 50
+        display.canvas.ops.clear()
+        pal.header("talk", t=0)
+        self.assertEqual(display.canvas.ops, [])
 
     def test_status_rotates_weather_and_agent_usage_every_six_seconds(self):
         pal, _ = load_pal()

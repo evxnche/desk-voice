@@ -123,9 +123,7 @@ class Scene:
         d = dashboard.display()
         c = d.canvas
         c.fill(0)
-        d.text_large("PIXEL PAL", 10, 8, 2)
-        d.text_large("%05d" % self.score, 310, 8, 2)
-        d.line(0, 32, 400, 32, 1)
+        dashboard.header(d, "pixel pal", "%05d" % self.score)
         for x, y in self.clouds:
             c.blit(CLOUD[0], x, y, 0)
         c.hline(0, GROUND, 400, 1)

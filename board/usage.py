@@ -202,7 +202,7 @@ def _codex(t):
             for w in (limits.get("primary_window"), limits.get("secondary_window")) if w]
 
 def fetch(previous=None):
-    """A snapshot shaped like the relay's ({"subtitle", "providers"}) for dashboard.draw. A provider
+    """A snapshot shaped like the relay's ({"providers"}) for dashboard.draw. A provider
     that fails keeps its previous numbers, marked with why."""
     t = _load()
     before = {p.get("name"): p for p in (previous or {}).get("providers", [])}
@@ -215,4 +215,4 @@ def fetch(previous=None):
         except Exception as e:
             print("usage %s: %s" % (name, e))
             cards.append({"name": label, "status": str(e)[:20], "windows": before.get(label, {}).get("windows", [])})
-    return {"subtitle": "direct", "providers": cards}
+    return {"providers": cards}

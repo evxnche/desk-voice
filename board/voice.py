@@ -243,7 +243,7 @@ class _Face:
     """The Pal while a question is on: listening (bars follow your voice), thinking, then speaking with
     its mouth following its own voice. Frames are paced to ~10 a second."""
     def __init__(self, keep=False):
-        self.keep = keep          # over a screen an answer opened: the corner Pal, not the full one
+        self.keep = keep          # over a screen an answer opened: the header Pal, not the full one
         self.bars, self.next, self.levels, self.caption = [], 0, [], []
         self.lines, self.page, self.played, self.total, self.huh = [], [], 0, 0, False
 
@@ -260,21 +260,21 @@ class _Face:
             del self.bars[:-25]
         if self._due():
             if self.keep:
-                pal.corner("listen", bars=self.bars)
+                pal.header("listen")
             else:
                 pal.draw("listen", self.bars[-1] if self.bars else 0, self.caption, bars=self.bars)
 
     def thinking(self):
         if self._due(150 if self.keep else 100):
             if self.keep:
-                pal.corner("think")
+                pal.header("think")
             else:
                 pal.draw("think")
 
     def waiting(self, left):
         if self._due(200):
             if self.keep:
-                pal.corner("wait", left=left)
+                pal.header("wait", left=left)
             else:
                 pal.draw("waiting", left)
 
@@ -285,7 +285,7 @@ class _Face:
         self.page = pal.caption_page(self.lines, 0)
         if self.keep:
             self.next = 0
-            pal.corner("talk")
+            pal.header("talk")
         else:
             pal.draw("huh" if huh else "speak", 0, self.page)
 
@@ -304,7 +304,7 @@ class _Face:
         level = min(1.0, (self.levels[-lag] if len(self.levels) >= lag else 0) / 3000)
         if self.keep:
             if self._due(250):                       # ~4 frames a second is plenty at this size
-                pal.corner("talk", level)
+                pal.header("talk", level)
             return
         page = self.page
         if self.total:
@@ -384,7 +384,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         opened=None):
     """One question: record while `key` is held, or after the wake phrase when `heard` (audio.woke())
     is given, or with `followup`, whatever you say in the FOLLOWUP_MS after an answer (no wake phrase;
-    `keep_screen`: an earlier answer opened the screen that's up, and the little corner Pal listens,
+    `keep_screen`: an earlier answer opened the screen that's up, and the little header Pal listens,
     thinks and speaks over it; `opened()` says whether an answer has opened a screen, so this one's
     reply goes over it the same way). Otherwise the Pal listens, thinks, then speaks the
     reply with its words underneath. If the reply comes with board commands (a screen for the weather,

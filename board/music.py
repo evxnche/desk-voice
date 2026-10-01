@@ -154,8 +154,7 @@ def draw():
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
-    d.text_large("MUSIC", 10, 8, 2)
-    d.line(0, 32, 400, 32, 1)
+    dashboard.header(d, "music", "on " + now["device"] if now and now.get("device") else "")
     if not refresh:
         d.text_large("Spotify not connected", 10, 100, 2)
         font5.text(c, "Open http://deskpal.local on your phone or Mac", 10, 140)
@@ -170,9 +169,6 @@ def draw():
         font5.text(c, "Start Spotify on any device, or hold KEY and say", 10, 160)
         font5.text(c, "\"play something chill\".", 10, 172)
     else:
-        if now.get("device"):
-            dev = dashboard.ascii("on " + now["device"])[:30]
-            font5.text(c, dev, 392 - 6 * len(dev), 13)
         # cover (or an empty frame) on the left
         c.rect(9, 41, ART + 2, ART + 2, 1)
         if cover:

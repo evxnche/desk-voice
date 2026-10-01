@@ -11,7 +11,7 @@ try:
 except ImportError:
     wake = None
 
-WAKE_PHRASES = ["hey ava"]  # any English phrase works; "ava" alone was heard 2 times in 25, "hey ava" 20 in 24
+WAKE_PHRASES = ["gee gee"]  # "gg"; any English phrase works; "hey ava" wasn't waking it reliably
 
 RATE = 15625
 MCLK_HZ = RATE * 256

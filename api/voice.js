@@ -641,7 +641,7 @@ const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|
 
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
 const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
-  'with its wake word "Hey Ava".';
+  'with its wake word "GG" (said "gee gee").';
 
 // The board calls this the moment you start talking, so a function that had gone cold (~0.6-0.9 s to
 // start) is warm by the time the question arrives.
@@ -695,7 +695,7 @@ export async function POST(request) {
   const wake = (request.headers.get('x-wake') || '').trim().toLowerCase();
   const followup = request.headers.get('x-followup') === '1';
   if (followup) {
-    // No wake phrase needed, but say one anyway ("ava, and tomorrow?") and it's dropped.
+    // No wake phrase needed, but say one anyway ("gee gee, and tomorrow?") and it's dropped.
     const at = new RegExp(`^\\W*(?:${ANY_WAKE})\\b[\\s,.!?:;-]*`, 'i').exec(heard);
     if (at) heard = heard.slice(at[0].length);
     console.log('followup | transcript:', transcript);

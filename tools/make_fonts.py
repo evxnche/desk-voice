@@ -2,6 +2,7 @@
 # Each cell matches the grid the screens were laid out on, so no layout moves:
 #   font_small.bin  MS Gothic 12 px in a 6 px cell       (was font5 5x7)
 #   font_body.bin   ABC Areal Mono Bold in an 8 px cell (was framebuf's 8x8)
+#   font_mid.bin    Departure Mono at 16.5 px (1.5x its grid) in a 12 px cell, for sub-headings
 #   font_bigN.bin   Departure Mono in an 8N px cell (was the 8x8 scaled N times by text_large); it's a
 #                   pixel font drawn on an 11 px grid, so it's rendered at whole multiples of 11 px
 # File layout (read by board/bitfont.py): cell width, cell height, rows above the capitals, then 95
@@ -48,5 +49,6 @@ def fit(path, scale, step=1, rows=8):
 BODY, BIG = "ABCArealMono-Bold.ttf", "DepartureMono-Regular.otf"
 build("font_small", "ms-gothic.ttf", 12, 6)   # 11 px squashes g/y descenders
 build("font_body", BODY, fit(BODY, 1), 8)
+build("font_mid", BIG, 16.5, 12)
 for s in BIG_SCALES:
     build("font_big%d" % s, BIG, fit(BIG, s, 11), 8 * s)

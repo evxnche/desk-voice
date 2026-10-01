@@ -1,6 +1,6 @@
 # Focus timer: big countdown; KEY pauses/resumes, BOOT cancels, chime when it ends.
 import time, math, struct
-import dashboard, battery, audio, palicon
+import dashboard, audio, palicon
 
 active = False
 paused = False
@@ -63,9 +63,7 @@ def draw():
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
-    d.text_large(dashboard.ascii(label.upper())[:12], 10, 8, 2)
-    battery.draw(d, 392, 8)
-    d.line(0, 32, 400, 32, 1)
+    dashboard.header(d, label.lower())
     s = (remaining() + 999) // 1000
     text = "%d:%02d" % (s // 60, s % 60) if s < 3600 else "%d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60)
     scale = 11 if len(text) <= 4 else 9 if len(text) <= 5 else 6
