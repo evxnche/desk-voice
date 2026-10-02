@@ -14,7 +14,7 @@ KM_PER_DEG = 111.32
 FILE = "track.json"
 ON_SCREEN_MS = 30 * 1000       # fetch this often while the screen shows
 OFF_SCREEN_MS = 2 * 60 * 1000  # and this often otherwise (take-off / landing lines)
-KEEP_MS = 2 * 3600 * 1000      # stop following this long after it lands
+HIDE_MS = 20 * 60 * 1000       # off the BOOT cycle after this long unlooked-at (still followed)
 
 flight = ""          # what's being followed, as typed ("BA36")
 last = None          # latest /api/track answer that had a position
@@ -24,9 +24,10 @@ landed = False
 fetched_ms = None    # ticks_ms of `last`, for gliding the plane between fetches
 mapdata = None       # (meta, FrameBuffer) from /api/trackmap
 version = 0          # bumped when new data arrives, so the screen redraws
-_fetch_at = 0
+_fetch_at = time.ticks_ms()
 _busy = False
 _landed_ms = None
+_viewed_ms = time.ticks_ms()   # last time its screen was up
 _said = set()        # "takeoff", "descent", "landed": each said once per flight
 on_news = None       # companion's hook: on_news(text)
 
@@ -41,16 +42,32 @@ try:
 except Exception:
     pass
 
-def start(f):
-    """Follow flight `f` ('' stops)."""
-    global flight, last, info, seen_at, landed, _fetch_at, _landed_ms, version, mapdata
-    flight = "".join(f.split()).upper()[:8]
-    last = info = seen_at = _landed_ms = mapdata = None
-    landed = False
-    _said.clear()
-    _fetch_at = 0
-    version += 1
-    _save()
+def start(f, data=None):
+    """Follow flight `f` ('' stops). `data`: an /api/track answer the voice assistant already has, so
+    the screen shows where it is (and its map) at once instead of "not in the air yet"."""
+    global flight, last, info, seen_at, landed, _fetch_at, _landed_ms, version, mapdata, _viewed_ms
+    f = "".join(f.split()).upper()[:8]
+    _viewed_ms = _fetch_at = time.ticks_ms()
+    if f != flight or not f:                 # the same flight again keeps what it has (and what it said)
+        flight = f
+        last = info = seen_at = _landed_ms = mapdata = None
+        landed = False
+        _said.clear()
+        version += 1
+        _save()
+    if f and data:
+        _take(data)
+        _fetch_at = time.ticks_add(_fetch_at, ON_SCREEN_MS)
+        if last and _map_due():
+            try:
+                _fetch_map()
+                version += 1
+            except Exception as e:
+                print("track map:", e)
+
+def hidden():
+    """Left off the BOOT cycle: nobody has looked at it for HIDE_MS (it's still followed)."""
+    return time.ticks_diff(time.ticks_ms(), _viewed_ms) > HIDE_MS
 
 def headers():
     """X-Track for voice questions ("how's the flight doing?")."""
@@ -93,19 +110,23 @@ def _judge(d):
         _landed_ms = time.ticks_ms()
         _news("landed", "%s has landed in %s." % (name, dest))
 
+def _take(d):
+    global last, info, seen_at, version, fetched_ms
+    _judge(d)
+    info = d
+    if d.get("seen"):
+        last, seen_at, fetched_ms = d, _clock(), time.ticks_ms()
+    version += 1
+
 def _worker():
-    global last, info, seen_at, version, _busy, fetched_ms
+    global version, _busy
+    f = flight
     try:
-        r = requests.get(URL + "&f=" + flight, timeout=15)
-        if r.status_code == 200:
-            d = r.json()
-            _judge(d)
-            info = d
-            if d.get("seen"):
-                last, seen_at, fetched_ms = d, _clock(), time.ticks_ms()
-            version += 1
+        r = requests.get(URL + "&f=" + f, timeout=15)
+        if r.status_code == 200 and f == flight:     # not stopped or changed meanwhile
+            _take(r.json())
         r.close()
-        if last and _map_due():
+        if last and f == flight and _map_due():
             _fetch_map()
             version += 1
     except Exception as e:
@@ -155,14 +176,16 @@ def _fetch_map():
     mapdata = (meta, framebuf.FrameBuffer(bits, meta["w"], meta["h"], framebuf.MONO_HLSB))
 
 def tick(connect, showing):
-    """Call often: fetches in the background when due."""
-    global _fetch_at, _busy
+    """Call often: fetches in the background when due; stops following once it has landed."""
+    global _fetch_at, _busy, _viewed_ms
     if not flight:
         return
-    if _landed_ms is not None and time.ticks_diff(time.ticks_ms(), _landed_ms) > KEEP_MS:
+    if landed:
         start("")
         return
     now = time.ticks_ms()
+    if showing:
+        _viewed_ms = now
     if _busy or time.ticks_diff(now, _fetch_at) < 0 or not connect():
         return
     _fetch_at = time.ticks_add(now, ON_SCREEN_MS if showing else OFF_SCREEN_MS)

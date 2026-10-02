@@ -214,8 +214,9 @@ def redraw():
 SCREENS = ("plan", "pal", "limits", "room", "pixel", "flights", "music", "track")
 
 def cycle():
-    """The screens BOOT steps through: the flight tracker only while it follows a flight."""
-    return SCREENS if tracker.flight else SCREENS[:-1]
+    """The screens BOOT steps through: the flight tracker only while it follows a flight that has
+    been looked at in the last 20 minutes."""
+    return SCREENS if tracker.flight and not tracker.hidden() else SCREENS[:-1]
 # Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
 # BOOT/dismiss returns to.
 home_screen = "plan"            # the start screen
@@ -273,7 +274,7 @@ def run(cmd):
         music.control(cmd.get("what") or "toggle")
         show("music")
     elif do == "track":                    # follow a flight ("" stops)
-        tracker.start(cmd.get("flight") or "")
+        tracker.start(cmd.get("flight") or "", cmd.get("data"))
         if tracker.flight:
             show("track")
         elif screen == "track":
@@ -658,6 +659,8 @@ while True:
     # Weather for every screen (the Pal's status line, rain warnings), not just "today"; the today
     # screen fetches its own after drawing, so switching there stays instant.
     tracker.tick(connect, screen == "track")     # also off-screen: take-off / landing lines
+    if screen == "track" and not tracker.flight:  # landed (or stopped): its screen goes too
+        show(SCREENS[0])
     lt = room.local_time()
     schedule.tick(connect, lt)
     if lt and lt[4] != checked_minute:

@@ -210,9 +210,11 @@ function trackTools(cmds, tracked) {
       execute: async ({ flight }) => {
         const f = cleanFlight(flight || tracked);
         if (!f) return { ok: false, error: 'no flight number given and none is being followed' };
-        const same = cleanFlight(tracked) === f;
-        cmds.push(same ? { do: 'screen', name: 'track' } : { do: 'track', flight: f });
+        // The board gets this answer too, so its screen shows the flight at once, not "not in the air yet".
+        const cmd = { do: 'track', flight: f };
+        cmds.push(cmd);
         const t = await track(f);
+        cmd.data = t;
         if (!t.seen) t.note = 'Not on flight radar right now: not taken off yet, landed a while ago, or out of receiver range over the sea.';
         return t;
       },
