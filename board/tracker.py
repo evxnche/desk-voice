@@ -164,7 +164,8 @@ def _fetch_map():
     q = "&lat=%.4f&lon=%.4f&kmpx=%s&w=%d&h=%d" % (lat, lon, kmpx, MW, MH)
     a, b = last.get("from") or {}, last.get("to") or {}
     if "lat" in a and "lat" in b:
-        q += "&route=%.4f,%.4f,%.4f,%.4f" % (a["lat"], a["lon"], b["lat"], b["lon"])
+        q += "&route=%.4f,%.4f,%.4f,%.4f&via=%.4f,%.4f" % (a["lat"], a["lon"], b["lat"], b["lon"],
+                                                          last["lat"], last["lon"])   # the line runs through the plane
     r = requests.get(MAP_URL + q, timeout=15)
     body = r.content
     r.close()
