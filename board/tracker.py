@@ -44,7 +44,7 @@ except Exception:
 
 def start(f, data=None):
     """Follow flight `f` ('' stops). `data`: an /api/track answer the voice assistant already has, so
-    the screen shows where it is (and its map) at once instead of "not in the air yet"."""
+    the screen shows where it is (and its map) at once instead of "not on radar now"."""
     global flight, last, info, seen_at, landed, _fetch_at, _landed_ms, version, mapdata, _viewed_ms
     f = "".join(f.split()).upper()[:8]
     _viewed_ms = _fetch_at = time.ticks_ms()
@@ -317,7 +317,7 @@ def _draw_static(d):
     elif last:
         d.text_large("in the air" if not last.get("on_ground") else "on ground", 256, 56, 2)
     else:
-        font5.text(c, "not in the air yet", 256, 42)
+        font5.text(c, "not on radar now", 256, 42)
     y = 102
     if last:
         rows = [("over", last.get("over") or "-")]

@@ -210,12 +210,16 @@ function trackTools(cmds, tracked) {
       execute: async ({ flight }) => {
         const f = cleanFlight(flight || tracked);
         if (!f) return { ok: false, error: 'no flight number given and none is being followed' };
-        // The board gets this answer too, so its screen shows the flight at once, not "not in the air yet".
+        // The board gets this answer too, so its screen shows the flight at once, not "not on radar now".
         const cmd = { do: 'track', flight: f };
         cmds.push(cmd);
         const t = await track(f);
         cmd.data = t;
-        if (!t.seen) t.note = 'Not on flight radar right now: not taken off yet, landed a while ago, or out of receiver range over the sea.';
+        // One likely reason, not a list of four ("not in the air, landed, over the ocean, on the ground...").
+        if (!t.seen) t.note = 'Not on flight radar right now, and there is no schedule data. Say so in one short sentence with the ' +
+          'single most likely reason: on a route that crosses an ocean (like Paris to New York) say it is probably over the ' +
+          'ocean, where there are no receivers, and that the tracker will pick it up when it nears land; otherwise that it ' +
+          'has probably not taken off yet or has already landed. Do not list possibilities.';
         return t;
       },
     }),
