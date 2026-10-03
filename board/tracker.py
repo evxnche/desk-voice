@@ -226,6 +226,8 @@ def status():
         return "%s landed" % flight
     if last and last.get("eta_min"):
         return "%s lands ~%s" % (flight, _clock(add_min=last["eta_min"]))
+    if not last and sched and sched.get("state") == "scheduled" and sched.get("off_uk"):
+        return "%s takes off ~%s" % (flight, sched["off_uk"])
     return "%s: %s" % (flight, "in the air" if last else "not seen yet")
 
 # A small aeroplane pointing up (north), nose at y = -9; rotated to the plane's track.
