@@ -20,8 +20,8 @@ KEY = open(os.path.join(HERE, "key")).read().strip()
 IP_CACHE = os.path.join(HERE, "board-ip")
 TURNS = os.path.join(HERE, "turns")
 
-# Things to open that aren't apps in /Applications.
-SITES = {"ezwrite": "https://ezwrite.xyz"}
+# Things to open that aren't apps in /Applications, by name without spaces (as transcribed: "easy write").
+SITES = {"ezwrite": "https://ezwrite.xyz", "easywrite": "https://ezwrite.xyz"}
 FORGET_AFTER = {"working": 6 * 3600, "waiting": 3 * 3600, "done": 3600}   # older sessions are left out
 
 
@@ -91,7 +91,7 @@ def run(action, target):
         name = target.strip()
         if not re.fullmatch(r"[\w .'&+-]{1,40}", name):
             raise ValueError("bad name")
-        site = SITES.get(name.lower())
+        site = SITES.get(name.lower().replace(" ", ""))
         subprocess.run(["open", site] if site else ["open", "-a", name], check=True, capture_output=True)
     else:
         raise ValueError("unknown action")

@@ -857,7 +857,7 @@ export async function POST(request) {
         (deviceContext.mac
           ? "The owner's Mac is connected: use mac_control to lock it or open an app or site on it, then confirm in a few words. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
-            'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly. '
+            'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly, without changing the screen. '
           : "The owner's Mac isn't connected right now, so you can't control it or see what Claude Code is doing on it. ") +
         'If your last message offered something (like a deep work session) and the owner accepts, do it right away ' +
         '(start_timer with that length and label) and confirm in a few words. ' +
