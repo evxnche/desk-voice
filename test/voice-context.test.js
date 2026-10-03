@@ -219,7 +219,10 @@ test('Mac control queues a board command only while the Mac is connected', async
   assert.equal((await online.mac_control.execute({ action: 'open' })).ok, false);
   assert.equal((await online.mac_control.execute({ action: 'lock', target: 'ignored' })).ok, true);
   assert.equal((await online.mac_control.execute({ action: 'open', target: ' ezwrite ' })).ok, true);
-  assert.deepEqual(commands, [{ do: 'mac', action: 'lock' }, { do: 'mac', action: 'open', target: 'ezwrite' }]);
+  assert.equal((await online.mac_control.execute({ action: 'close' })).ok, false);
+  assert.equal((await online.mac_control.execute({ action: 'close', target: 'Calculator' })).ok, true);
+  assert.deepEqual(commands, [{ do: 'mac', action: 'lock' }, { do: 'mac', action: 'open', target: 'ezwrite' },
+    { do: 'mac', action: 'close', target: 'Calculator' }]);
 });
 
 test('"what\'s Claude doing?" keeps the screen as it is', () => {

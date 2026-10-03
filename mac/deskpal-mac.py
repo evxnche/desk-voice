@@ -99,16 +99,23 @@ def find(name):
 
 
 def run(action, target):
+    print(action, target, flush=True)
     if action == "lock":
         # Sleeping the display locks the Mac: its screen lock is set to "immediately".
         subprocess.run(["pmset", "displaysleepnow"], check=True)
-    elif action == "open":
+    elif action in ("open", "close"):
         name = target.strip()
         if not re.fullmatch(r"[\w .'&+-]{1,40}", name):
             raise ValueError("bad name")
         kind, what = find(name)
-        print("open:", name, "->", what, flush=True)
-        subprocess.run(["open", what] if kind == "site" else ["open", "-a", what], check=True, capture_output=True)
+        print("  ->", what, flush=True)
+        if action == "open":
+            subprocess.run(["open", what] if kind == "site" else ["open", "-a", what], check=True, capture_output=True)
+        elif kind == "site":
+            raise ValueError("can't close a site")
+        else:
+            # Quit like Cmd-Q, so an app with unsaved work asks first.
+            subprocess.run(["osascript", "-e", 'quit app "%s"' % what], check=True, capture_output=True)
     else:
         raise ValueError("unknown action")
 
@@ -136,7 +143,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        print(self.address_string(), fmt % args, flush=True)
+        print(self.address_string(), (fmt % args).split("?")[0], flush=True)   # not the key
 
 
 def main():

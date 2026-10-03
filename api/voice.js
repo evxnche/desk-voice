@@ -415,18 +415,18 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       },
     }),
     mac_control: tool({
-      description: "Do something on the owner's Mac: lock it, or open an app or site by name (e.g. ezwrite, Safari, Spotify).",
+      description: "Do something on the owner's Mac: lock it, open an app or site by name (e.g. ezwrite, Safari, Spotify), or close (quit) an app.",
       inputSchema: jsonSchema({
         type: 'object',
-        properties: { action: { type: 'string', enum: ['lock', 'open'] }, target: { type: 'string', description: 'What to open' } },
+        properties: { action: { type: 'string', enum: ['lock', 'open', 'close'] }, target: { type: 'string', description: 'What to open or close' } },
         required: ['action'],
         additionalProperties: false,
       }),
       execute: async ({ action, target }) => {
         if (!deviceContext.mac) return { ok: false, error: "The Mac isn't connected (asleep, off, or its helper isn't running)" };
         const clean = String(target || '').trim().slice(0, 40);
-        if (action === 'open' && !clean) return { ok: false, error: 'Nothing to open: ask the owner what' };
-        cmds.push({ do: 'mac', action, ...(action === 'open' && { target: clean }) });
+        if (action !== 'lock' && !clean) return { ok: false, error: `Nothing to ${action}: ask the owner what` };
+        cmds.push({ do: 'mac', action, ...(action !== 'lock' && { target: clean }) });
         return { ok: true };
       },
     }),
@@ -527,7 +527,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|open (up )?(my |the )?\w+|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 export const PLANNY = /\b(add|put|mark|tick|cross|remove|delete|finish(ed)?|done|move|moved|start(ed)?)\b.*\b(tasks?|to-?dos?|list|projects?|pipeline|idea|ideas|building|testing|shipped)\b|\bremind me to\b/i;
@@ -909,7 +909,7 @@ export async function POST(request) {
         'When asked for the menu or what you can do, use show_screen with menu and just say it is on screen. ' +
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         (deviceContext.mac
-          ? "The owner's Mac is connected: use mac_control to lock it or open an app or site on it, then confirm in a few words. " +
+          ? "The owner's Mac is connected: use mac_control to lock it, open an app or site, or close an app, then confirm in a few words. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
             'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly, without changing the screen. '
           : "The owner's Mac isn't connected right now, so you can't control it or see what Claude Code is doing on it. ") +
