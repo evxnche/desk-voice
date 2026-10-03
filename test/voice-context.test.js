@@ -221,3 +221,12 @@ test('Mac control queues a board command only while the Mac is connected', async
   assert.equal((await online.mac_control.execute({ action: 'open', target: ' ezwrite ' })).ok, true);
   assert.deepEqual(commands, [{ do: 'mac', action: 'lock' }, { do: 'mac', action: 'open', target: 'ezwrite' }]);
 });
+
+test('"what\'s Claude doing?" keeps the screen as it is', () => {
+  const cmds = [{ do: 'screen', name: 'plan', section: 'tasks' }];
+  applyBoardBackstops('What is Claude doing right now?', null, cmds, { radius: 20 }, {}, ['show_screen']);
+  assert.deepEqual(cmds, []);
+  const other = [{ do: 'screen', name: 'plan' }];
+  applyBoardBackstops('show my plan', null, other, { radius: 20 }, {}, ['show_screen']);
+  assert.deepEqual(other, [{ do: 'screen', name: 'plan' }]);
+});

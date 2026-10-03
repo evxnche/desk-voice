@@ -670,6 +670,8 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
     changes.set = true;
   }
   if (MENUY.test(heard) && !cmds.some((c) => c.do === 'screen')) cmds.push({ do: 'screen', name: 'menu' });
+  // "What's Claude doing?" is answered in words; the model likes to open a plan screen with it.
+  if (CLAUDE_STATUS.test(heard)) for (let i = cmds.length - 1; i >= 0; i--) if (cmds[i].do === 'screen') cmds.splice(i, 1);
   const section = expandedSection(heard);
   if (section && !cmds.some((c) => c.section)) {
     for (let i = cmds.length - 1; i >= 0; i--) if (cmds[i].do === 'screen') cmds.splice(i, 1);
@@ -686,6 +688,8 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
   }
   if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
 }
+
+const CLAUDE_STATUS = /\b(claude|codex)('s| is)? (doing|up to|working on|busy)\b|\bwhat('s| is) (claude|codex) (doing|up to|working on)\b/i;
 
 // "Menu", "what can you do?": the menu screen lists every feature.
 const MENUY = /\b(menu|what (else )?can you do|everything you can do|(list|all) (of )?(your |the )?features|features? list)\b/i;

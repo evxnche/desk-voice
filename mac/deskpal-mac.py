@@ -8,7 +8,7 @@
 
 Lives next to notify.py in ~/.claude/deskpal and shares its key and board-ip files.
 """
-import json, os, re, socket, subprocess, threading, time, urllib.request
+import difflib, glob, json, os, re, socket, subprocess, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -83,6 +83,21 @@ def check_in(sessions):
             continue                          # the board may have a new address: look it up once more
 
 
+def find(name):
+    """The site URL or app a spoken name means, also when it was transcribed a bit off ("Easy Right")."""
+    squash = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    apps = {}
+    for path in glob.glob("/Applications/*.app") + glob.glob("/System/Applications/*.app") + \
+            glob.glob(os.path.expanduser("~/Applications/*.app")):
+        app = os.path.basename(path)[:-4]
+        apps.setdefault(squash(app), app)
+    known = {**{k: ("site", v) for k, v in SITES.items()}, **{k: ("app", v) for k, v in apps.items()}}
+    close = difflib.get_close_matches(squash(name), known, n=1, cutoff=0.75)
+    if not close:
+        raise ValueError("nothing called that")
+    return known[close[0]]
+
+
 def run(action, target):
     if action == "lock":
         # Sleeping the display locks the Mac: its screen lock is set to "immediately".
@@ -91,8 +106,9 @@ def run(action, target):
         name = target.strip()
         if not re.fullmatch(r"[\w .'&+-]{1,40}", name):
             raise ValueError("bad name")
-        site = SITES.get(name.lower().replace(" ", ""))
-        subprocess.run(["open", site] if site else ["open", "-a", name], check=True, capture_output=True)
+        kind, what = find(name)
+        print("open:", name, "->", what, flush=True)
+        subprocess.run(["open", what] if kind == "site" else ["open", "-a", what], check=True, capture_output=True)
     else:
         raise ValueError("unknown action")
 
