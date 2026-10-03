@@ -12,6 +12,8 @@ MAX_TASKS, MAX_PROJECTS, MAX_LEN = 30, 16, 60
 tasks = []        # [{"t": text, "done": bool}], oldest first
 projects = []     # [{"n": name, "s": stage}]
 version = 0       # bumped on every change, so the screen redraws
+SECTIONS = ("tasks", "projects", "calendar")
+section = None    # one of SECTIONS: that part alone, full screen with every item's whole text
 
 try:
     with open(FILE) as f:
@@ -126,7 +128,7 @@ def frame():
     """Call often while the screen shows: redraws when the plan, the calendar or the minute changes."""
     global _shown
     lt = room.local_time()
-    key = (version, lt and lt[4], schedule.status(), len(schedule.upcoming))
+    key = (version, section, lt and lt[4], schedule.status(), len(schedule.upcoming))
     if key != _shown:
         _shown = key
         draw(lt)
@@ -152,11 +154,81 @@ def _event_lines(lt):
         rows.append((_when(e), e["t"]))
     return rows
 
+def _wrap(text, width):
+    """`text` as lines of at most `width` chars, broken between words (a too-long word is cut)."""
+    lines, line = [], ""
+    for word in text.split():
+        while len(word) > width:
+            if line:
+                lines.append(line)
+                line = ""
+            lines.append(word[:width])
+            word = word[width:]
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = line + " " + word if line else word
+    return lines + [line] if line else lines or [""]
+
+def _section_rows(lt):
+    """Rows for the full-screen section: ("head", "", text), ("task", done, text), ("item", "", text)
+    or ("event", time, text)."""
+    if section == "tasks":
+        todo = [t["t"] for t in tasks if not t["done"]]
+        done = [t["t"] for t in tasks if t["done"]]
+        rows = [("head", "", "to do (%d)" % len(todo))] + [("task", False, t) for t in todo]
+        if not todo:
+            rows.append(("item", "", "nothing to do"))
+        if done:
+            rows += [("head", "", "done (%d)" % len(done))] + [("task", True, t) for t in done]
+        return rows
+    if section == "projects":
+        rows = []
+        for stage in STAGES:
+            names = [p["n"] for p in projects if p["s"] == stage]
+            if names:
+                rows += [("head", "", "%s (%d)" % (stage, len(names)))] + [("item", "", n) for n in names]
+        return rows or [("item", "", "no projects yet")]
+    if not schedule.link:
+        return [("item", "", "add your calendars on deskpal.local")]
+    return [("head", "", r[0]) if len(r) == 1 else ("event", r[0], r[1]) for r in _event_lines(lt)]
+
+def _draw_section(d, lt):
+    c = d.canvas
+    dashboard.header(d, section, "boot = back")
+    rows, y = _section_rows(lt), 30
+    for i, (kind, mark, text) in enumerate(rows):
+        x = 10 if kind == "head" else 72 if kind == "event" else 22
+        lines = [text] if kind == "head" else _wrap(text, (392 - x) // 8)
+        left = sum(1 for r in rows[i:] if r[0] != "head")
+        if y + 15 * len(lines) > (298 if left <= 1 else 283):    # keep a row for "+n more"
+            if left:
+                font5.text(c, "+%d more" % left, 22, y + 2)
+            break
+        if kind == "head":
+            font5.text(c, text, 10, y + 3)
+        elif kind == "task":
+            c.rect(10, y + 1, 8, 8, 1)
+            if mark:
+                c.fill_rect(12, y + 3, 4, 4, 1)
+        elif kind == "event":
+            font5.text(c, mark, 10, y + 2)
+        if kind != "head":
+            for line in lines:
+                d.text(line, x, y, 1)
+                y += 15
+        else:
+            y += 15
+    d.show()
+
 def draw(lt=None):
     lt = lt or room.local_time()
     d = dashboard.display()
     c = d.canvas
     d.clear(0)
+    if section:
+        return _draw_section(d, lt)
     dashboard.header(d, "plan")
 
     # To do (left)

@@ -397,15 +397,20 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       },
     }),
     show_screen: tool({
-      description: 'Switch the gadget to a screen: limits (AI usage), today (clock + weather), plan (tasks, projects, calendar), pixel (game), flights (radar), music.',
+      description: 'Switch the gadget to a screen: limits (AI usage), today (clock + weather), plan (tasks, projects, calendar), pixel (game), flights (radar), music. ' +
+        'Give `section` to show one part of the plan screen alone, full screen with every item\'s whole text ' +
+        '(when asked to expand, enlarge or see all of the tasks, the projects/pipeline/ideas or the calendar).',
       inputSchema: jsonSchema({
         type: 'object',
-        properties: { screen: { type: 'string', enum: Object.keys(SCREEN_NAMES) } },
+        properties: {
+          screen: { type: 'string', enum: Object.keys(SCREEN_NAMES) },
+          section: { type: 'string', enum: ['tasks', 'projects', 'calendar'] },
+        },
         required: ['screen'],
         additionalProperties: false,
       }),
-      execute: async ({ screen }) => {
-        cmds.push({ do: 'screen', name: SCREEN_NAMES[screen] || 'limits' });
+      execute: async ({ screen, section }) => {
+        cmds.push(section ? { do: 'screen', name: 'plan', section } : { do: 'screen', name: SCREEN_NAMES[screen] || 'limits' });
         return { ok: true };
       },
     }),
@@ -506,7 +511,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 export const PLANNY = /\b(add|put|mark|tick|cross|remove|delete|finish(ed)?|done|move|moved|start(ed)?)\b.*\b(tasks?|to-?dos?|list|projects?|pipeline|idea|ideas|building|testing|shipped)\b|\bremind me to\b/i;
@@ -635,6 +640,11 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
     view.radius = clampRadius(spoken);
     changes.set = true;
   }
+  const section = expandedSection(heard);
+  if (section && !cmds.some((c) => c.section)) {
+    for (let i = cmds.length - 1; i >= 0; i--) if (cmds[i].do === 'screen') cmds.splice(i, 1);
+    cmds.push({ do: 'screen', name: 'plan', section });
+  }
   if (!changes.set && !cmds.length) {
     if (used.includes('get_nearby_flights') || (FLIGHTY.test(heard) && !used.includes('track_flight'))) cmds.push({ do: 'screen', name: 'flights' });
     else if (used.includes('get_weather') || WEATHERY.test(heard)) cmds.push({ do: 'screen', name: 'room' });
@@ -645,6 +655,15 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
     else if (/\b(quieter|softer|turn (it |the volume )?down|volume down)\b/i.test(heard)) cmds.push({ do: 'volume', step: -2 });
   }
   if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
+}
+
+// "Expand my projects", "show the tasks full screen": one plan section alone, with the whole text.
+const EXPANDY = /\b(expand|enlarge|full ?screen|bigger|full (text|names?|list))\b/i;
+const SECTION_WORDS = [['projects', /\b(projects?|pipeline|ideas?|building|testing|shipped)\b/i],
+  ['calendar', /\b(calendar|schedule|events?|meetings?)\b/i], ['tasks', /\b(tasks?|to-?dos?|list)\b/i]];
+
+export function expandedSection(heard) {
+  return EXPANDY.test(heard) ? SECTION_WORDS.find(([, re]) => re.test(heard))?.[0] || null : null;
 }
 
 // "Where are my Codex limits at?": the answer comes from the limits in the prompt, so the model often
@@ -798,6 +817,7 @@ export async function POST(request) {
         'screen, next to their calendar; the device context lists them as they are right now, even if earlier messages said ' +
         'otherwise. Answer questions about them from that. Only say a change was made if the tool returned ok; if it failed, say so. ' +
         'Use update_tasks and update_project only when asked to change them ("remind me to X" adds a task), then confirm in a few words. ' +
+        'When asked to expand or see the whole of the tasks, projects or calendar, use show_screen with that section. ' +
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         'If your last message offered something (like a deep work session) and the owner accepts, do it right away ' +
         '(start_timer with that length and label) and confirm in a few words. ' +

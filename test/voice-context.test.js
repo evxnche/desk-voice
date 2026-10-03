@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyBoardBackstops, boardTools, buildVoiceMessages, decodeDeviceContext, firstToolFor,
+import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, firstToolFor,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
 const header = (value) => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -171,4 +171,19 @@ test('a task that is literally called "New task" can still be ticked off or remo
   assert.equal((await tools.update_tasks.execute({ action: 'remove', text: 'New task' })).ok, true);
   assert.equal((await tools.update_tasks.execute({ action: 'done', text: 'new task' })).ok, true);
   assert.deepEqual(commands, [{ do: 'task_remove', text: 'New task' }, { do: 'task_done', text: 'New task', done: true }]);
+});
+
+test('"expand my projects" opens that plan section full screen', async () => {
+  assert.equal(expandedSection('Gee gee, expand my projects'), 'projects');
+  assert.equal(expandedSection('show my tasks full screen'), 'tasks');
+  assert.equal(expandedSection('enlarge the calendar'), 'calendar');
+  assert.equal(expandedSection('what are my tasks?'), null);
+  const cmds = [{ do: 'screen', name: 'plan' }];
+  applyBoardBackstops('expand the pipeline', null, cmds, { radius: 20 }, {}, ['show_screen']);
+  assert.deepEqual(cmds, [{ do: 'screen', name: 'plan', section: 'projects' }]);
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null });
+  await tools.show_screen.execute({ screen: 'plan', section: 'tasks' });
+  await tools.show_screen.execute({ screen: 'tasks' });
+  assert.deepEqual(commands, [{ do: 'screen', name: 'plan', section: 'tasks' }, { do: 'screen', name: 'plan' }]);
 });

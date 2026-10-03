@@ -227,6 +227,8 @@ def show(name):
     """Switch to a screen (from BOOT, the remote page or a voice command)."""
     global screen, home_screen, shows
     shows += 1
+    if name != "plan":
+        plan.section = None
     if name in SCREENS:
         home_screen = name
     screen = name
@@ -258,6 +260,7 @@ def run(cmd):
         alert_until = time.ticks_add(time.ticks_ms(), MESSAGE_MS)
         return True
     elif do == "screen" and cmd.get("name") in SCREENS + ("timer",):
+        plan.section = cmd.get("section") if cmd.get("section") in plan.SECTIONS else None
         show(cmd["name"])
     elif do == "timer":
         timer.start(float(cmd.get("minutes") or 25), cmd.get("label") or "Focus")
@@ -639,6 +642,9 @@ while True:
             if screen == "alert":
                 alerts.clear()
             leave_takeover()
+        elif screen == "plan" and plan.section:   # a section full screen: back to the whole plan
+            plan.section = None
+            show("plan")
         else:
             order = cycle()
             show(order[(order.index(screen) + 1) % len(order)] if screen in order else order[0])
