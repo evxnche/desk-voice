@@ -2,7 +2,8 @@
 # bar and the plane on it, and the Pal says when it takes off, starts coming down and lands.
 # Set from the remote page (deskpal.local) or by voice ("gee gee, track BA36"). Data: desk-voice
 # /api/track (adsb.lol + adsbdb). Over oceans there are no receivers, so the flight can vanish for
-# hours: the screen keeps the last position it saw.
+# hours: then desk-voice asks FlightAware (fa=1, at most every FA_MS: each lookup costs) and the
+# plane is drawn where the timetable puts it.
 import time, json, requests, _thread, math, framebuf
 from array import array
 import dashboard, font5, secrets, room, flights, palicon
@@ -14,6 +15,7 @@ KM_PER_DEG = 111.32
 FILE = "track.json"
 ON_SCREEN_MS = 30 * 1000       # fetch this often while the screen shows
 OFF_SCREEN_MS = 2 * 60 * 1000  # and this often otherwise (take-off / landing lines)
+FA_MS = 15 * 60 * 1000         # FlightAware at most this often while no receiver hears it
 HIDE_MS = 20 * 60 * 1000       # off the BOOT cycle after this long unlooked-at (still followed)
 
 flight = ""          # what's being followed, as typed ("BA36")
@@ -28,6 +30,9 @@ _fetch_at = time.ticks_ms()
 _busy = False
 _landed_ms = None
 _viewed_ms = time.ticks_ms()   # last time its screen was up
+_fa_at = time.ticks_ms()       # FlightAware may be asked from then on
+sched = None         # FlightAware's answer: {state, off_uk, on_uk...}
+_cs = ""             # the callsign it was last heard under (Air France's can differ from the number)
 _said = set()        # "takeoff", "descent", "landed": each said once per flight
 on_news = None       # companion's hook: on_news(text)
 
@@ -45,12 +50,14 @@ except Exception:
 def start(f, data=None):
     """Follow flight `f` ('' stops). `data`: an /api/track answer the voice assistant already has, so
     the screen shows where it is (and its map) at once instead of "not on radar now"."""
-    global flight, last, info, seen_at, landed, _fetch_at, _landed_ms, version, mapdata, _viewed_ms
+    global flight, last, info, seen_at, landed, _fetch_at, _landed_ms, version, mapdata, _viewed_ms, sched, _cs, _fa_at
     f = "".join(f.split()).upper()[:8]
     _viewed_ms = _fetch_at = time.ticks_ms()
     if f != flight or not f:                 # the same flight again keeps what it has (and what it said)
         flight = f
-        last = info = seen_at = _landed_ms = mapdata = None
+        last = info = seen_at = _landed_ms = mapdata = sched = None
+        _cs = ""
+        _fa_at = _fetch_at
         landed = False
         _said.clear()
         version += 1
@@ -93,7 +100,9 @@ def _judge(d):
     name = d.get("flight") or flight
     dest = (d.get("to") or {}).get("city") or "its destination"
     origin = (d.get("from") or {}).get("city") or ""
-    if d.get("seen"):
+    if (d.get("schedule") or {}).get("state") == "landed" and not d.get("seen"):
+        landed = True                        # FlightAware says so
+    elif d.get("seen"):
         left, total = d.get("km_left"), d.get("km_total")
         if d.get("on_ground") and left is not None and left < 40:
             landed = True
@@ -111,18 +120,26 @@ def _judge(d):
         _news("landed", "%s has landed in %s." % (name, dest))
 
 def _take(d):
-    global last, info, seen_at, version, fetched_ms
+    global last, info, seen_at, version, fetched_ms, sched, _cs
     _judge(d)
     info = d
-    if d.get("seen"):
+    if "schedule" in d:
+        sched = d["schedule"]
+    if d.get("seen") or d.get("est"):        # heard, or where FlightAware's timetable puts it
         last, seen_at, fetched_ms = d, _clock(), time.ticks_ms()
+    if d.get("seen") and d.get("callsign"):
+        _cs = d["callsign"]
     version += 1
 
 def _worker():
-    global version, _busy
+    global version, _busy, _fa_at
     f = flight
+    q = "&f=" + f + ("&cs=" + _cs if _cs else "")
+    if time.ticks_diff(time.ticks_ms(), _fa_at) >= 0 and not (info and info.get("seen")):
+        q += "&fa=1"                         # only asked when no receiver hears it anyway
+        _fa_at = time.ticks_add(time.ticks_ms(), FA_MS)
     try:
-        r = requests.get(URL + "&f=" + f, timeout=15)
+        r = requests.get(URL + q, timeout=15)
         if r.status_code == 200 and f == flight:     # not stopped or changed meanwhile
             _take(r.json())
         r.close()
@@ -232,8 +249,9 @@ def where():
     if not (last and mapdata):
         return None
     lat, lon = last["lat"], last["lon"]
-    if info and info.get("seen") and not landed and fetched_ms is not None:
-        dt = min(120, time.ticks_diff(time.ticks_ms(), fetched_ms) / 1000)
+    est = last.get("est")                    # estimated: keeps gliding until FlightAware is asked again
+    if (est or info and info.get("seen")) and not landed and fetched_ms is not None:
+        dt = min(FA_MS / 1000 if est else 120, time.ticks_diff(time.ticks_ms(), fetched_ms) / 1000)
         km = last.get("speed_kmh", 0) * dt / 3600
         t = math.radians(last.get("track", 0))
         lat += km * math.cos(t) / KM_PER_DEG
@@ -308,20 +326,30 @@ def _draw_static(d):
     if landed:
         font5.text(c, "landed in", 256, 42)
         d.text_large(dashboard.ascii(b.get("city") or "")[:9], 256, 56, 2)
-    elif last and last.get("eta_min"):
+    elif last and last.get("eta_min") is not None:
         m = last["eta_min"]
+        if last.get("est") and fetched_ms is not None:
+            m = max(0, m - time.ticks_diff(time.ticks_ms(), fetched_ms) // 60000)
         big = "%d min" % m if m < 100 else "%dh%02d" % (m // 60, m % 60)
         font5.text(c, "lands in", 256, 42)
         d.text_large(big, 256, 54, 3 if len(big) * 24 <= 142 else 2)
         font5.text(c, "about %s uk time" % _clock(add_min=m), 256, 82)
     elif last:
         d.text_large("in the air" if not last.get("on_ground") else "on ground", 256, 56, 2)
+    elif sched and sched.get("state") == "scheduled" and sched.get("off_uk"):
+        font5.text(c, "takes off about", 256, 42)
+        d.text_large(sched["off_uk"], 256, 56, 2)
+        font5.text(c, "uk time", 256, 82)
     else:
         font5.text(c, "not on radar now", 256, 42)
     y = 102
     if last:
         rows = [("over", last.get("over") or "-")]
-        if not landed:
+        if last.get("est") and not landed:
+            rows += [("", "estimated"), ("", "no live signal")]
+            if last.get("km_left") is not None:
+                rows.append(("to go", "%s km" % flights._commas(last["km_left"])))
+        elif not landed:
             v = last.get("vrate", 0)
             rows += [("alt", "%s ft" % flights._commas(last.get("alt_ft", 0))),
                      ("", "climbing" if v > 300 else "descending" if v < -300 else "level"),
@@ -341,9 +369,10 @@ def _draw_static(d):
         c.rect(256, 262, 136, 8, 1)
         c.fill_rect(258, 264, int(132 * frac), 4, 1)
         font5.text(c, "%d%% of the way" % int(frac * 100), 256, 250)
-    stale = info is not None and not info.get("seen") and last is not None
+    stale = info is not None and not info.get("seen") and last is not None and not last.get("est")
     palicon.draw(c, 360, 220, "tracking")
-    foot = ("no signal since %s" % seen_at) if stale else ("updated %s" % seen_at) if last else \
+    foot = ("no signal since %s" % seen_at) if stale else ("estimated %s" % seen_at) if last and last.get("est") else \
+           ("updated %s" % seen_at) if last else \
            ("checked %s" % _clock()) if info else "looking..."
     c.fill_rect(0, 286, 400, 14, 1)
     d.text(dashboard.ascii(foot + "   KEY: refresh")[:50], 4, 289, 0)

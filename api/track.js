@@ -1,5 +1,5 @@
 // One flight's position and progress for the board's track screen.
-// GET ?k=VOICE_KEY&f=BA36 (any spelling: BAW036, ba 36...).
+// GET ?k=VOICE_KEY&f=BA36 (any spelling: BAW036, ba 36...)[&fa=1: ask FlightAware if unheard][&cs=AFR16UE].
 import { track } from '../lib/track.js';
 
 export async function GET(request) {
@@ -9,7 +9,7 @@ export async function GET(request) {
   }
   let data;
   try {
-    data = await track(url.searchParams.get('f'));
+    data = await track(url.searchParams.get('f'), { fa: url.searchParams.get('fa') === '1', cs: url.searchParams.get('cs') || '' });
   } catch (e) {
     return new Response(String(e.message), { status: 502 });
   }

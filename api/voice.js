@@ -213,10 +213,15 @@ function trackTools(cmds, tracked) {
         // The board gets this answer too, so its screen shows the flight at once, not "not on radar now".
         const cmd = { do: 'track', flight: f };
         cmds.push(cmd);
-        const t = await track(f);
+        const t = await track(f, { fa: true });
         cmd.data = t;
+        if (t.est) t.note = 'No receiver hears it right now (over the sea or remote land), so the position is estimated from ' +
+          "FlightAware's timetable: say it took off at schedule.off_uk and lands about schedule.on_uk UK time, and roughly where " +
+          'it should be now (over). Do not read out a list of possibilities.';
+        else if (!t.seen && t.schedule) t.note = 'Not heard by receivers right now. schedule (from FlightAware) says whether it is ' +
+          'scheduled (takes off about off_uk), or landed (at on_uk), with times in UK time. Answer from that in one short sentence.';
         // One likely reason, not a list of four ("not in the air, landed, over the ocean, on the ground...").
-        if (!t.seen) t.note = 'Not on flight radar right now, and there is no schedule data. Say so in one short sentence with the ' +
+        else if (!t.seen) t.note = 'Not on flight radar right now, and there is no schedule data. Say so in one short sentence with the ' +
           'single most likely reason: on a route that crosses an ocean (like Paris to New York) say it is probably over the ' +
           'ocean, where there are no receivers, and that the tracker will pick it up when it nears land; otherwise that it ' +
           'has probably not taken off yet or has already landed. Do not list possibilities.';
