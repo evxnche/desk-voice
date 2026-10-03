@@ -35,6 +35,8 @@ TABLES = (
         ("timer", '"25 minute focus timer" / "5 min break"'),
         ("music", '"play something chill" / "play <song>" / "pause" / "skip" / "previous song"'),
         ("track flight", '"track ba36"'),
+        ("mac", '"lock my mac" / "open ezwrite"'),
+        ("claude", '"what\'s claude doing?"'),
         ("radar", '"what planes are overhead?" / "show flights over heathrow" / "zoom out to 100 km"'),
     )),
     ((("speaks up when", 256), ("it", 136)), (

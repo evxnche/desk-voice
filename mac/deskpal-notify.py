@@ -8,6 +8,9 @@ Claude Code hooks (JSON on stdin, event name as argv[1]):
   notify  Notification      chime "needs you" (permission prompts, idle input requests)
 Codex `notify` (JSON as the last argv): agent-turn-complete -> "done".
 
+Each Claude session's state (working / waiting / done, its project and your last prompt) is kept in
+turns/<session> for deskpal-mac.py, which tells the board ("what's Claude doing?").
+
 Always exits 0 within ~2 s: a board that's off or on another network must never slow an agent.
 """
 import json, os, socket, sys, time, urllib.request
@@ -55,17 +58,30 @@ def claude(event):
     project = os.path.basename(data.get("cwd") or os.getcwd())
     os.makedirs(STARTS, exist_ok=True)
     start_file = os.path.join(STARTS, session)
+    try:
+        with open(start_file) as f:
+            turn = json.load(f)
+        if not isinstance(turn, dict):        # older files hold just the start time
+            turn = {"start": float(turn)}
+    except (OSError, ValueError):
+        turn = {}
+    now = time.time()
     if event == "prompt":
-        with open(start_file, "w") as f:
-            f.write(str(time.time()))
-    elif event == "stop":
-        try:
-            with open(start_file) as f:
-                took = time.time() - float(f.read())
-        except (OSError, ValueError):
+        turn = {"start": now, "prompt": " ".join(str(data.get("prompt") or "").split())[:120]}
+    if event == "stop":
+        if "start" not in turn:
             return
-        if took >= LONG_TURN_S:
-            send("Claude", project, "done", "Finished after %d min." % max(1, round(took / 60)))
+        took = now - turn["start"]
+        turn["state"] = "done"
+    elif event == "notify" and turn.get("state") == "done":
+        pass                                  # "waiting for your input" after a finished turn: still done
+    else:
+        turn["state"] = "working" if event == "prompt" else "waiting"
+    turn.update(project=project, at=now)
+    with open(start_file, "w") as f:
+        json.dump(turn, f)
+    if event == "stop" and took >= LONG_TURN_S:
+        send("Claude", project, "done", "Finished after %d min." % max(1, round(took / 60)))
     elif event == "notify":
         send("Claude", project, "needs", data.get("message") or "Claude is waiting for you.")
 

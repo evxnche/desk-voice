@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, firstToolFor,
+import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, firstToolFor,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
 const header = (value) => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -197,4 +197,27 @@ test('"expand my projects" opens that plan section full screen', async () => {
   await tools.show_screen.execute({ screen: 'plan', section: 'tasks' });
   await tools.show_screen.execute({ screen: 'tasks' });
   assert.deepEqual(commands, [{ do: 'screen', name: 'plan', section: 'tasks' }, { do: 'screen', name: 'plan' }]);
+});
+
+test('the Mac header is read only when well formed, and its Claude sessions reach the model', () => {
+  const mac = (value) => new Request('https://example.test/', { headers: { 'x-mac': header(value) } });
+  assert.equal(decodeMac(new Request('https://example.test/')), null);
+  const session = { project: 'esp32', state: 'working', mins: 4, prompt: 'add mac control' };
+  assert.deepEqual(decodeMac(mac({ claude: [session] })),
+    { claude: [{ project: 'esp32', state: 'working', minutes: 4, prompt: 'add mac control' }] });
+  assert.deepEqual(decodeMac(mac({})), { claude: [] });
+  assert.deepEqual(decodeMac(mac({ claude: [{ ...session, state: 'rm -rf' }] })), { claude: [] });
+  const messages = buildVoiceMessages([], "what's Claude doing?", { memories: [], mac: decodeMac(mac({ claude: [session] })) }, null);
+  assert.match(messages[0].content, /claude_code_sessions_on_mac.*add mac control/);
+});
+
+test('Mac control queues a board command only while the Mac is connected', async () => {
+  const commands = [];
+  const offline = boardTools(commands, '', { memories: [], alert: null, mac: null });
+  assert.equal((await offline.mac_control.execute({ action: 'lock' })).ok, false);
+  const online = boardTools(commands, '', { memories: [], alert: null, mac: { claude: [] } });
+  assert.equal((await online.mac_control.execute({ action: 'open' })).ok, false);
+  assert.equal((await online.mac_control.execute({ action: 'lock', target: 'ignored' })).ok, true);
+  assert.equal((await online.mac_control.execute({ action: 'open', target: ' ezwrite ' })).ok, true);
+  assert.deepEqual(commands, [{ do: 'mac', action: 'lock' }, { do: 'mac', action: 'open', target: 'ezwrite' }]);
 });

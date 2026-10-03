@@ -9,6 +9,8 @@ Firmware + backend for a Waveshare ESP32-S3-RLCD-4.2 desk gadget (MicroPython v1
 
 Fonts: `board/font_*.bin` are 1-bit bitmaps of MS Gothic (small), Departure Mono (text) and ABC Areal Mono Bold (headings), made by `python3 tools/make_fonts.py` from the TTFs in ~/Library/Fonts; `board/bitfont.py` draws them.
 
+Mac control (`mac/deskpal-mac.py`, copied to `~/.claude/deskpal/mac.py` and run by launchd from `mac/com.evan.deskpal-mac.plist`): checks in with the board every minute with its address and what each Claude Code session is doing (from the `turns/` files the hooks in `mac/deskpal-notify.py` keep), and takes the board's voice commands: "lock my Mac" (sleeps the display; the screen lock is set to immediately), "open ezwrite" (an app by name, or a site from `SITES`), "what's Claude doing?".
+
 Upload: `python3 -m mpremote cp board/*.py board/*.bin : + cp secrets.py :secrets.py + reset`
 
 WhatsApp notifications (`board/phone.py`): the board is a Bluetooth ANCS client (Apple's Notification Center Service). Pair once from the iPhone's Settings > Bluetooth ("deskpal"), allow it to share notifications, and new WhatsApp notifications pop up like the agent alerts (8 s). Bonding keys live in `ble_bonds.json` on the board. Bluetooth takes ~50 KB of internal RAM, which is why the voice request thread is 30 KB, not 32.

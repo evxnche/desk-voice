@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker, memories, schedule, plan, menu
+import pal, companion, tracker, memories, schedule, plan, menu, mac
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -295,6 +295,8 @@ def run(cmd):
     elif do == "volume":                   # {"level": 0-10} or {"step": +-n}
         step, level = cmd.get("step"), cmd.get("level")
         return audio.set_volume(audio.volume + int(step) if step else audio.volume if level is None else level)
+    elif do == "mac":                      # "lock my Mac", "open ezwrite"
+        return mac.do(cmd.get("action"), cmd.get("target") or "")
     elif do in PLAN_DO:                    # tasks and projects; each opens the plan screen
         ok = PLAN_DO[do](cmd)
         show("plan")
@@ -324,7 +326,7 @@ def handle(method, path, q, body):
     global active_alert
     # The remote page and its buttons are open to anyone on the home Wi-Fi. Mac agent alerts use the
     # shared key; Spotify token hand-offs use a token-specific signature so the key stays private.
-    if path == "/agent" and q.get("k") != secrets.VOICE_KEY:
+    if path in ("/agent", "/mac") and q.get("k") != secrets.VOICE_KEY:
         return 401, "text/plain", "wrong or missing key"
     if path == "/spotify-token" and not music.verify_handoff(q.get("refresh"), q.get("sig")):
         return 401, "text/plain", "invalid Spotify handoff"
@@ -376,7 +378,8 @@ def handle(method, path, q, body):
             "alert": ("%d alert(s)" % len(alerts.queue)) if alerts.queue else "", "phone": phone.status(),
             "limits": usage.connected(), "track": tracker.status(), "flight": tracker.flight,
             "calendar": schedule.status(), "calendars": schedule.names(),
-            "volume": audio.volume, "wake": wake_status()})
+            "volume": audio.volume, "wake": wake_status(),
+            "mac": ("connected, %d Claude session(s)" % len(mac.claude)) if mac.online() else ""})
     if path == "/plan" and method == "GET":
         return 200, "application/json", json.dumps(plan.state())
     if path == "/plan" and q.get("do") in PLAN_DO:
@@ -423,6 +426,8 @@ def handle(method, path, q, body):
             if kind == "needs":
                 companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
         return 200, "application/json", '{"ok":true}'
+    if path == "/mac":                       # the Mac helper checking in
+        return 200, "application/json", json.dumps({"ok": mac.check_in(json.loads(body or b"{}"))})
     if path == "/spotify-token" and q.get("refresh"):
         music.save_token(q["refresh"])
         show("music")
