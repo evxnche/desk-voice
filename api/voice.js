@@ -275,7 +275,7 @@ const PLACEHOLDER = /^(a |an |the |my |another )?(new |untitled |another )?(task
 export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [], alert: null }) {
   const SCREEN_NAMES = { limits: 'limits', home: 'limits', today: 'room', weather: 'room', clock: 'room',
     pixel: 'pixel', game: 'pixel', flights: 'flights', radar: 'flights', music: 'music', spotify: 'music', tracker: 'track',
-    plan: 'plan', tasks: 'plan', projects: 'plan', calendar: 'plan' };
+    plan: 'plan', tasks: 'plan', projects: 'plan', calendar: 'plan', menu: 'menu', help: 'menu', features: 'menu' };
   return {
     save_memory: tool({
       description: 'Save one explicit personal preference or fact only when the owner asks you to remember it. Do not save inferred facts.',
@@ -397,7 +397,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       },
     }),
     show_screen: tool({
-      description: 'Switch the gadget to a screen: limits (AI usage), today (clock + weather), plan (tasks, projects, calendar), pixel (game), flights (radar), music. ' +
+      description: 'Switch the gadget to a screen: limits (AI usage), today (clock + weather), plan (tasks, projects, calendar), pixel (game), flights (radar), music, menu (a list of everything the gadget can do). ' +
         'Give `section` to show one part of the plan screen alone, full screen with every item\'s whole text ' +
         '(when asked to expand, enlarge or see all of the tasks, the projects/pipeline/ideas or the calendar).',
       inputSchema: jsonSchema({
@@ -511,7 +511,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 export const PLANNY = /\b(add|put|mark|tick|cross|remove|delete|finish(ed)?|done|move|moved|start(ed)?)\b.*\b(tasks?|to-?dos?|list|projects?|pipeline|idea|ideas|building|testing|shipped)\b|\bremind me to\b/i;
@@ -640,6 +640,7 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
     view.radius = clampRadius(spoken);
     changes.set = true;
   }
+  if (MENUY.test(heard) && !cmds.some((c) => c.do === 'screen')) cmds.push({ do: 'screen', name: 'menu' });
   const section = expandedSection(heard);
   if (section && !cmds.some((c) => c.section)) {
     for (let i = cmds.length - 1; i >= 0; i--) if (cmds[i].do === 'screen') cmds.splice(i, 1);
@@ -656,6 +657,9 @@ export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used)
   }
   if (changes.weather && cmds.some((c) => c.name === 'room')) cmds.unshift({ do: 'weather', ...changes.weather });
 }
+
+// "Menu", "what can you do?": the menu screen lists every feature.
+const MENUY = /\b(menu|what (else )?can you do|everything you can do|(list|all) (of )?(your |the )?features|features? list)\b/i;
 
 // "Expand my projects", "show the tasks full screen": one plan section alone, with the whole text.
 const EXPANDY = /\b(expand|enlarge|full ?screen|bigger|full (text|names?|list))\b/i;
@@ -818,6 +822,7 @@ export async function POST(request) {
         'otherwise. Answer questions about them from that. Only say a change was made if the tool returned ok; if it failed, say so. ' +
         'Use update_tasks and update_project only when asked to change them ("remind me to X" adds a task), then confirm in a few words. ' +
         'When asked to expand or see the whole of the tasks, projects or calendar, use show_screen with that section. ' +
+        'When asked for the menu or what you can do, use show_screen with menu and just say it is on screen. ' +
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         'If your last message offered something (like a deep work session) and the owner accepts, do it right away ' +
         '(start_timer with that length and label) and confirm in a few words. ' +

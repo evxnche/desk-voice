@@ -152,6 +152,17 @@ test('agent limits questions open the limits screen even without show_screen', (
   assert.deepEqual(speed, []);
 });
 
+test('asking for the menu opens the menu screen', () => {
+  for (const heard of ['Gee gee, menu', 'What can you do?', 'Show me the menu', 'List all your features']) {
+    const cmds = [];
+    applyBoardBackstops(heard, null, cmds, { radius: 20 }, {}, []);
+    assert.deepEqual(cmds, [{ do: 'screen', name: 'menu' }], heard);
+  }
+  const tasks = [];
+  applyBoardBackstops("What's on my list?", null, tasks, { radius: 20 }, {}, []);
+  assert.deepEqual(tasks, []);
+});
+
 test('"add a task" with no task asks instead of adding a made-up one', async () => {
   const commands = [];
   const tools = boardTools(commands, '', { memories: [], alert: null, plan: { todo: [], done: [], projects: [] } });

@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker, memories, schedule, plan
+import pal, companion, tracker, memories, schedule, plan, menu
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -210,6 +210,8 @@ def redraw():
         plan.enter()
     if screen == "limits":
         show_limits(footer)
+    if screen == "menu":
+        menu.enter()
 
 SCREENS = ("plan", "pal", "limits", "room", "pixel", "flights", "music", "track")
 
@@ -217,7 +219,7 @@ def cycle():
     """The screens BOOT steps through: the flight tracker only while it follows a flight that has
     been looked at in the last 20 minutes."""
     return SCREENS if tracker.flight and not tracker.hidden() else SCREENS[:-1]
-# Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert". `home_screen` is where
+# Takeover screens (not in the BOOT cycle): "timer", "timer_done", "alert", "menu". `home_screen` is where
 # BOOT/dismiss returns to.
 home_screen = "plan"            # the start screen
 
@@ -229,6 +231,8 @@ def show(name):
     shows += 1
     if name != "plan":
         plan.section = None
+    if name == "menu" and screen != "menu":
+        menu.page = 0
     if name in SCREENS:
         home_screen = name
     screen = name
@@ -259,7 +263,7 @@ def run(cmd):
         show("alert")
         alert_until = time.ticks_add(time.ticks_ms(), MESSAGE_MS)
         return True
-    elif do == "screen" and cmd.get("name") in SCREENS + ("timer",):
+    elif do == "screen" and cmd.get("name") in SCREENS + ("timer", "menu"):
         plan.section = cmd.get("section") if cmd.get("section") in plan.SECTIONS else None
         show(cmd["name"])
     elif do == "timer":
@@ -524,6 +528,8 @@ def tick_screen(speaking=False):
         tracker.frame()
     if screen == "plan":
         plan.frame()
+    if screen == "menu":
+        menu.frame()
     if screen in ("limits", "track"):            # the only screens not redrawn each minute: keep the header clock right
         lt = room.local_time()
         if lt and lt[4] != shown_minute:
@@ -608,6 +614,8 @@ while True:
         tracker.refresh_now()
     elif action == "tap" and screen == "room":
         room.fetch_weather_soon()
+    elif action == "tap" and screen == "menu":
+        menu.next_page()
     elif action == "tap" and screen == "pal":
         footer = fetch()                         # fresh limits on the status line
         companion.check_limits(last)
@@ -641,6 +649,8 @@ while True:
         elif screen in ("alert", "timer_done"):
             if screen == "alert":
                 alerts.clear()
+            leave_takeover()
+        elif screen == "menu":
             leave_takeover()
         elif screen == "plan" and plan.section:   # a section full screen: back to the whole plan
             plan.section = None

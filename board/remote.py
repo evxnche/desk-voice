@@ -62,7 +62,7 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <button onclick="addMemory()">Save</button></div>
 <button onclick="clearMemories()" style="width:100%%;margin-top:8px">Forget all memories</button>
 <script>
-const NAMES={plan:'Plan',pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight'};
+const NAMES={plan:'Plan',pal:'Pal',limits:'Limits',room:'Today',pixel:'Game',flights:'Flights',music:'Music',track:'My flight',menu:'Menu'};
 const sc=document.getElementById('screens');
 for(const n in NAMES){const b=document.createElement('button');b.textContent=NAMES[n];b.id='s-'+n;b.onclick=()=>go('/screen?name='+n);sc.appendChild(b)}
 async function go(p){await fetch(p,{method:'POST'}).catch(()=>{});refresh()}
