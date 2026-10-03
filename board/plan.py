@@ -196,7 +196,7 @@ def _section_rows(lt):
 
 def _draw_section(d, lt):
     c = d.canvas
-    dashboard.header(d, section, "boot = back")
+    dashboard.header(d, section)
     rows, y = _section_rows(lt), 30
     for i, (kind, mark, text) in enumerate(rows):
         x = 10 if kind == "head" else 72 if kind == "event" else 22
