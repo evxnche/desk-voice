@@ -38,6 +38,7 @@ TABLES = (
         ("mac", '"lock my mac" / "open ezwrite"'),
         ("claude", '"what\'s claude doing?"'),
         ("radar", '"what planes are overhead?" / "show flights over heathrow" / "zoom out to 100 km"'),
+        ("spanish", '"let\'s practice spanish" (15 s to reply) / "stop practicing"'),
     )),
     ((("speaks up when", 256), ("it", 136)), (
         ("claude or codex needs you", "says why"),

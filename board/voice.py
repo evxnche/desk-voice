@@ -22,6 +22,14 @@ def _recent():
     now = time.ticks_ms()
     return [[q, a] for at, q, a in history if time.ticks_diff(now, at) < HISTORY_MS]
 
+# Spanish practice ("gee gee, let's practice Spanish"): desk-voice answers as a tutor while this is on.
+# Ends on "stop practicing", or HISTORY_MS after the last practice exchange.
+PRACTICE_FOLLOWUP_MS = 15000   # longer to think of a reply in Spanish
+_practice_at = None
+
+def practicing():
+    return _practice_at is not None and time.ticks_diff(time.ticks_ms(), _practice_at) < HISTORY_MS
+
 def _context_header(value):
     return binascii.b2a_base64(json.dumps(value).encode()).decode().strip()
 
@@ -61,6 +69,8 @@ def _headers(wake, followup=False):
     hdrs.update(plan.headers())       # "what's on my list?"
     hdrs.update(mac.headers())        # "lock my Mac", "what's Claude doing?"
     hdrs["X-Volume"] = str(audio.volume)   # "turn it up a bit"
+    if practicing():
+        hdrs["X-Practice"] = "es"
     return hdrs
 
 def _request(data, box, hdrs, url=None):
@@ -329,8 +339,12 @@ def _problem(text, back):
         time.sleep_ms(50)
 
 def _run_board_commands(cmds, run):
+    global _practice_at
     problem = None
     for cmd in cmds:
+        if cmd.get("do") == "practice":
+            _practice_at = time.ticks_ms() if cmd.get("on") else None
+            continue
         result = run(cmd)
         if result is False and cmd.get("do") == "memory_add":
             problem = "Memory not saved"
@@ -413,7 +427,7 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
             while not key.value():                   # let go of the KEY that interrupted the last reply
                 time.sleep_ms(10)
             audio.listen()                           # its ring buffer holds whatever you say next
-            pcm = audio.record_followup(MAX_SECONDS, FOLLOWUP_MS, stop=lambda: back() or not key.value(),
+            pcm = audio.record_followup(MAX_SECONDS, PRACTICE_FOLLOWUP_MS if practicing() else FOLLOWUP_MS, stop=lambda: back() or not key.value(),
                                         progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
                                         waiting=face.waiting)
             if pcm is None:

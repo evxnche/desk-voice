@@ -6,17 +6,22 @@
 #   font_bigN.bin   Departure Mono in an 8N px cell (was the 8x8 scaled N times by text_large); it's a
 #                   pixel font drawn on an 11 px grid, so it's rendered at whole multiples of 11 px
 # File layout (read by board/bitfont.py): cell width, cell height, rows above the capitals, then 95
-# glyphs (chars 32..126), MONO_HLSB, 1 = ink. y on the board is still the top of the capitals, as with
-# the old fonts; taller glyphs (brackets, ascenders) reach `above` rows higher.
-import os
+# glyphs (chars 32..126) and the Spanish letters in bitfont.EXTRA, MONO_HLSB, 1 = ink. y on the board
+# is still the top of the capitals, as with the old fonts; taller glyphs (brackets, ascenders) reach
+# `above` rows higher.
+import ast, os, unicodedata
 from PIL import Image, ImageDraw, ImageFont
 
 FONTS = os.path.expanduser("~/Library/Fonts")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "board")
+# After ASCII, so Spanish shows its accents. Read from bitfont.py, which needs MicroPython to import.
+EXTRA = next(ast.literal_eval(n.value) for n in ast.parse(open(os.path.join(OUT, "bitfont.py")).read()).body
+             if isinstance(n, ast.Assign) and n.targets[0].id == "EXTRA")
 CHARS = [chr(c) for c in range(32, 127)]
 BIG_SCALES = (2, 3, 4, 5, 6, 8, 9, 11)   # every scale text_large() is called with
 
-def build(name, path, size, cell_w):
+def build(name, path, size, cell_w, accents=True):
+    """`accents=False`: the Spanish letters are drawn as their plain letters (é as e, ¿ as ?)."""
     font = ImageFont.truetype(os.path.join(FONTS, path), size)
     boxes = [font.getbbox(ch, anchor="ls") for ch in CHARS if ch != " "]
     top = min(b[1] for b in boxes)                 # tallest glyph (negative, above the baseline)
@@ -26,7 +31,9 @@ def build(name, path, size, cell_w):
     adv = round(font.getlength("0"))
     x0 = max(0, (cell_w - adv) // 2)               # centre narrower glyphs in the cell
     out = bytearray([cell_w, cell_h, above])
-    for ch in CHARS:
+    for ch in CHARS + list(EXTRA):                 # the cell fits ASCII; capital accents may be clipped
+        if ch in EXTRA and not accents:
+            ch = {"\u00bf": "?", "\u00a1": "!"}.get(ch) or unicodedata.normalize("NFD", ch)[0]
         img = Image.new("1", (cell_w, cell_h), 1)
         d = ImageDraw.Draw(img)
         d.fontmode = "1"                           # no anti-aliasing: exactly what the panel shows
@@ -47,7 +54,7 @@ def fit(path, scale, step=1, rows=8):
         size += step
 
 BODY, BIG = "ABCArealMono-Bold.ttf", "DepartureMono-Regular.otf"
-build("font_small", "ms-gothic.ttf", 12, 6)   # 11 px squashes g/y descenders
+build("font_small", "ms-gothic.ttf", 12, 6, accents=False)   # 11 px squashes g/y descenders; its é loses the e
 build("font_body", BODY, fit(BODY, 1), 8)
 build("font_mid", BIG, 16.5, 12)
 for s in BIG_SCALES:

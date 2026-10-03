@@ -709,6 +709,45 @@ const LIMITSY = /\b(claude|codex|agent|usage|rate)\b.*\blimits?\b|\blimits?\b.*\
 
 const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
 
+// Spanish practice: "let's practice Spanish" turns it on, "stop practicing" or "back to English" off.
+// The board keeps the mode (X-Practice: es) and drops it after 10 minutes without a practice turn.
+const PRACTICE_ON = /\b(practi[cs]e|learn|study|teach me)\b.*\bspanish\b|\bspanish (mode|practice|lesson|class)\b/i;
+const PRACTICE_OFF = /\b(stop|end|quit|exit|finish|done)\b.*\b(practi[cs]ing|practice|spanish|lesson)\b|\b(back|switch|go) to english\b|\benglish mode\b/i;
+
+// 'on' (start or keep practicing), 'off' (stop), or null (an ordinary question).
+export function practiceSwitch(heard, practicing) {
+  if (PRACTICE_OFF.test(heard)) return practicing ? 'off' : null;
+  return practicing || PRACTICE_ON.test(heard) ? 'on' : null;
+}
+
+const TUTOR =
+  'You are a friendly Spanish tutor living in a small desk gadget. The owner is a beginner learning Spanish by ' +
+  'talking with you. Your reply is spoken aloud and shown on a tiny screen, so keep it to one to three short sentences. ' +
+  'Speak mostly simple, everyday Spanish, and right after anything a beginner may not know give the English meaning ' +
+  'in a few words. When they say something in Spanish with a mistake, first say the corrected sentence, explain it ' +
+  'briefly in English, then carry on. When they ask in English how to say something, give the Spanish and invite them ' +
+  'to say it back. When they get it right, praise them briefly. End most replies with a simple question or prompt so ' +
+  'they keep speaking Spanish, and make things a little harder as they do well. Earlier messages are this practice ' +
+  'conversation. Use no markdown, lists, emoji or pronunciation spellings. The gadget\'s other features are paused ' +
+  'while practicing: if they ask for one (weather, timers, music...), tell them in English to say "stop practicing" first.';
+
+async function practiceAnswer(history, heard, starting) {
+  try {
+    const result = await generateText({
+      model: CHAT_MODEL,
+      providerOptions: { openai: { reasoningEffort: 'minimal' } },
+      system: TUTOR + (starting ? ' They have just asked to start: greet them and suggest a simple first topic.' : ''),
+      messages: [...history, { role: 'user', content: heard }],
+    });
+    return result.text;
+  } catch (e) {
+    console.error(e);
+    return /rate limit/i.test(String(e?.message)) || e?.lastError?.statusCode === 429
+      ? "I've hit the free tier's limit of a few questions a minute. Try again in a minute."
+      : 'Sorry, something went wrong answering that.';
+  }
+}
+
 // A reply after an answer comes with no wake phrase, so noise, a cough or a "thanks" may be all it
 // is: stay quiet for those instead of answering.
 const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|ok(ay)?|cool|great|bye|you|mm+|hmm+|uh+|um+)\W*$/i;
@@ -804,6 +843,17 @@ export async function POST(request) {
     return reply(heard, text, await speak(text), adpcm, null, [], { forget: true });
   }
   const history = historyFrom(request);
+  const practicing = request.headers.get('x-practice') === 'es';
+  const practice = practiceSwitch(heard, practicing);
+  if (practice === 'off') {
+    const text = 'Okay, back to English. ¡Hasta luego!';
+    return reply(heard, text, await speak(text), adpcm, null, [{ do: 'practice', on: false }]);
+  }
+  if (practice === 'on') {
+    const text = await practiceAnswer(history, heard, !practicing);
+    console.log('practice | heard:', heard, '| said:', text);
+    return reply(heard, text, await speak(text), adpcm, null, [{ do: 'practice', on: true }]);
+  }
 
   const now = new Date().toLocaleString('en-US', { timeZone: 'Europe/London', dateStyle: 'full', timeStyle: 'short' });
   const view = {

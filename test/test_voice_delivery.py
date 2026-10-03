@@ -124,6 +124,20 @@ class VoiceDeliveryTests(unittest.TestCase):
                                     heard=(0, 1, 0, 0))
         self.assertEqual(result, {"board": []})
 
+    def test_practice_commands_switch_the_mode_without_reaching_main(self):
+        now = [1000]
+        ran = []
+        with patch.object(self.voice.time, "ticks_ms", lambda: now[0], create=True), \
+                patch.object(self.voice.time, "ticks_diff", lambda a, b: a - b, create=True):
+            self.voice._run_board_commands([{"do": "practice", "on": True}, {"do": "screen"}], ran.append)
+            self.assertEqual(ran, [{"do": "screen"}])
+            self.assertTrue(self.voice.practicing())
+            now[0] += self.voice.HISTORY_MS                  # ten quiet minutes: back to normal
+            self.assertFalse(self.voice.practicing())
+            self.voice._run_board_commands([{"do": "practice", "on": True}], ran.append)
+            self.voice._run_board_commands([{"do": "practice", "on": False}], ran.append)
+            self.assertFalse(self.voice.practicing())
+
     def test_animation_keeps_only_recent_audio_levels(self):
         self.voice.audio.mean_level = lambda chunk: chunk[0]
         face = self.voice._Face()

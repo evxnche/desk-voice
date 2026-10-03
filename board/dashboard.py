@@ -1,5 +1,5 @@
 from machine import Pin, SPI
-import rlcd, battery, font5
+import rlcd, battery, font5, bitfont
 
 W, H = 400, 300
 _display = None
@@ -21,6 +21,8 @@ for _base, _accented in (("a", "\u00e0\u00e1\u00e2\u00e3\u00e4\u00e5"), ("e", "\
     for _ch in _accented:
         _SUBS[_ch] = _base
         _SUBS[chr(ord(_ch) - 32)] = _base.upper()   # Latin-1 capitals sit 32 below; MicroPython can't .upper() them
+for _ch in bitfont.EXTRA:                             # except Spanish ones: the fonts have those
+    _SUBS[_ch] = _ch
 
 def ascii(s):
     return "".join(_SUBS.get(c, c if 32 <= ord(c) < 127 else "-") for c in str(s))
