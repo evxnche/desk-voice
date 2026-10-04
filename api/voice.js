@@ -538,6 +538,25 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         return { ok: true, opened: `${site || 'google'} results for ${q}` };
       },
     }),
+    mac_play_video: tool({
+      description: "Play a YouTube video on the owner's Mac: opens the top YouTube result for the query, which starts playing. " +
+        'Use it when they ask to play, watch or put on a video, including "play the first video" after a YouTube search ' +
+        '(use that search as the query).',
+      inputSchema: jsonSchema({ type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }),
+      execute: async ({ query }) => {
+        if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
+        const q = String(query || '').trim().slice(0, 200);
+        if (!q) return { ok: false, error: 'No video named: ask the owner which one' };
+        try {
+          const video = await firstYouTubeVideo(q);
+          if (!video) return { ok: false, error: `No YouTube video found for ${q}` };
+          cmds.push({ do: 'mac', action: 'url', target: `https://www.youtube.com/watch?v=${video.id}` });
+          return { ok: true, playing: video.title };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      },
+    }),
     mac_copy: tool({
       description: "Put text on the owner's Mac clipboard, ready to paste: the whole of your last answer, word for word, " +
         'unless they ask for just part of it.',
@@ -563,7 +582,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
     }),
     spotify_play: tool({
       description: 'Play music on the owner\'s Spotify. For a mood or genre ("something chill") use kind playlist; ' +
-        'for a named song use track; also album or artist.',
+        'for a named song use track; also album or artist. Never for videos: use mac_play_video for those.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: { query: { type: 'string' }, kind: { type: 'string', enum: ['playlist', 'track', 'album', 'artist'] } },
@@ -741,6 +760,20 @@ const SEARCH_URLS = {
   maps: 'https://www.google.com/maps/search/',
 };
 const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't running)";
+
+// The top video for a YouTube search, read from the results page (no API key). The consent cookie
+// skips the EU cookie page; the browser UA gets the full page with the results in it.
+export async function firstYouTubeVideo(query) {
+  const r = await fetch(SEARCH_URLS.youtube + encodeURIComponent(query), {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
+               'Accept-Language': 'en-GB,en;q=0.9', Cookie: 'SOCS=CAI; CONSENT=YES+' },
+    signal: AbortSignal.timeout(6000),
+  });
+  if (!r.ok) throw new Error(`YouTube search failed (${r.status})`);
+  const m = /"videoRenderer":\{"videoId":"([\w-]{11})".*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/s.exec(await r.text());
+  if (!m) return null;
+  return { id: m[1], title: JSON.parse(`"${m[2]}"`) };
+}
 
 // Dictation: "dictation mode" makes KEY recordings type on the Mac (X-Dictate from the board) until
 // "stop dictation"; "type see you at five" types one line from any recording.
@@ -1003,13 +1036,17 @@ export async function POST(request) {
     // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
     // (OpenAI options, for STT_MODEL=openai/...) English only: left to guess, gpt-4o-mini-transcribe heard
     // "show me aircraft over Bournemouth" as Czech, and with only the language hint once wrote Urdu script.
+    // grok-stt reads only the xai options: left to guess, a bare "gee gee" came back as Hindi "जी जी।"
+    // (2026-10-04, live and with `say`). Spanish practice keeps guessing so Spanish is written as Spanish.
     transcribe({ model: gateway.transcriptionModel(STT_MODEL), audio: toWav(pcm, RATE),
-                 providerOptions: { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT } } })
+                 providerOptions: { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT },
+                                    ...(request.headers.get('x-practice') !== 'es' && { xai: { language: 'en' } }) } })
       .catch(() => ({ text: '' })),
     limitsSummary(),
   ]);
   ms.transcribe = Date.now() - t0 - ms.upload;
-  let heard = transcript;
+  // Even told English, grok-stt can still write "gee gee" in Hindi script (a Hindi voice did, 2026-10-04).
+  let heard = transcript.replace(/जी[\s,]*जी[।.,!?]*/g, 'Gee gee.');
   // Wake-phrase recordings (X-Wake: the phrase) start a few seconds before the board recognised
   // it, so they include the phrase. The board's listener also fires on look-alikes ("urgent" for
   // "agent"), so only answer when the transcript really has the phrase, and answer what comes
@@ -1028,7 +1065,7 @@ export async function POST(request) {
   if (wake) {
     const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const at = new RegExp(`\\b(?:${words})(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
-    console.log('wake:', wake, '| transcript:', heard, '| match:', Boolean(at));
+    console.log('wake:', wake, '| transcript:', transcript, '| match:', Boolean(at));
     if (!at) return ignored(heard);
     heard = heard.slice(at.index + at[0].length);
     if (!heard.trim()) {
@@ -1147,6 +1184,7 @@ export async function POST(request) {
           ? "The owner's Mac is connected: use mac_control to lock it, sleep it, hide its windows, open or close an app or site, " +
             'or change its volume, then confirm in a few words. To look something up on a site ("open YouTube and search for X", ' +
             '"look up X on Google"), use mac_search once; it opens the results, no separate open needed. ' +
+            'To play or watch a video ("play the deep dive video", "play the first one"), use mac_play_video, never Spotify. ' +
             'To close a tab ("close that tab", "close the YouTube tab"), use mac_control close_tab, never close (that quits an app). Use mac_copy when asked to copy something or put it on the clipboard. ' +
             "Use look_at_screen for any question about what is on their screen (\"what's this error?\"), then just say you're taking a look. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
