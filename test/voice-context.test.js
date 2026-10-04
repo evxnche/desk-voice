@@ -307,3 +307,13 @@ test('"put that on my clipboard" copies the whole last answer; "just the number"
   copyLastAnswer('copy just the number', history, part);
   assert.equal(part[0].target, '020 7946 0000');
 });
+
+test('search opens the site\'s results on the Mac, Google by default', async () => {
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null, mac: { claude: [] } });
+  await tools.mac_search.execute({ query: 'Perplexity', site: 'youtube' });
+  await tools.mac_search.execute({ query: 'fish & chips' });
+  assert.equal((await tools.mac_search.execute({ query: ' ' })).ok, false);
+  assert.deepEqual(commands, [{ do: 'mac', action: 'url', target: 'https://www.youtube.com/results?search_query=Perplexity' },
+    { do: 'mac', action: 'url', target: 'https://www.google.com/search?q=fish%20%26%20chips' }]);
+});

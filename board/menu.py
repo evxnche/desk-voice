@@ -38,6 +38,7 @@ TABLES = (
         ("track flight", '"track ba36"'),
         ("mac", '"lock my mac" / "open ezwrite" / "close calculator" / "sleep my mac" / "hide everything"'),
         ("mac volume", '"mac volume 30" / "mute my mac"'),
+        ("search", '"open youtube and look up perplexity" / "search google for ..."'),
         ("screen", '"what\'s this error?" / "what\'s on my screen?"'),
         ("clipboard", '"put that on my clipboard"'),
         ("dictation", '"dictation mode": hold key, it types on the mac; "stop dictation"; or "type <words>"'),

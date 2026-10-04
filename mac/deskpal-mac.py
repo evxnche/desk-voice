@@ -30,7 +30,11 @@ LOOK_URL = "https://desk-voice.vercel.app/api/look"
 UTF8 = dict(os.environ, LANG="en_US.UTF-8")   # launchd sets no locale, and pbcopy then mangles accents
 
 # Things to open that aren't apps in /Applications, by name without spaces (as transcribed: "easy write").
-SITES = {"ezwrite": "https://ezwrite.xyz", "easywrite": "https://ezwrite.xyz"}
+# Any other site opens when it's said as a domain ("bbc.co.uk").
+SITES = {"ezwrite": "https://ezwrite.xyz", "easywrite": "https://ezwrite.xyz",
+         "youtube": "https://www.youtube.com", "twitter": "https://x.com", "x": "https://x.com",
+         "gmail": "https://mail.google.com", "github": "https://github.com", "reddit": "https://www.reddit.com",
+         "chatgpt": "https://chatgpt.com", "googlecalendar": "https://calendar.google.com", "vercel": "https://vercel.com"}
 FORGET_AFTER = {"working": 6 * 3600, "waiting": 3 * 3600, "done": 3600}   # older sessions are left out
 
 
@@ -94,6 +98,8 @@ def check_in(sessions):
 
 def find(name):
     """The site URL or app a spoken name means, also when it was transcribed a bit off ("Easy Right")."""
+    if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", name.lower()):
+        return "site", "https://" + name.lower()
     squash = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
     apps = {}
     for path in glob.glob("/Applications/*.app") + glob.glob("/System/Applications/*.app") + \
@@ -159,6 +165,10 @@ def run(action, target):
         subprocess.run(["pbcopy"], input=target.encode(), check=True, env=UTF8)
     elif action == "type":
         type_text(target)
+    elif action == "url":                 # search results ("open YouTube and look up Perplexity")
+        if not re.fullmatch(r"https://[^\s\"']{1,500}", target):
+            raise ValueError("not a web address")
+        subprocess.run(["open", target], check=True, capture_output=True)
     elif action == "screen":
         threading.Thread(target=look, args=(target or "What's on my screen?",), daemon=True).start()
     elif action in ("open", "close"):
@@ -281,6 +291,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             print("failed:", cmd, e, flush=True)
             self.reply(400, {"ok": False})
+            # The board already said it was done: put that right.
+            what = {"open": "open %s", "close": "close %s", "url": "open that"}.get(cmd.get("action"), "do that")
+            try:
+                say_on_board("screen", "Sorry, I couldn't %s on your Mac." % (what % cmd.get("target", "") if "%s" in what else what))
+            except Exception:
+                pass
 
     def reply(self, status, data):
         body = json.dumps(data).encode()

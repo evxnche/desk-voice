@@ -421,7 +421,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['lock', 'sleep', 'hide_all', 'open', 'close', 'volume', 'mute', 'unmute'] },
-          target: { type: 'string', description: 'The app or site to open or close' },
+          target: { type: 'string', description: 'The app to open or close, or for a website its domain (youtube.com, x.com)' },
           level: { type: 'integer', minimum: 0, maximum: 100, description: 'Volume percent' },
         },
         required: ['action'],
@@ -470,6 +470,24 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         if (!match) return { ok: false, error: 'No reminder like that', reminders: deviceContext.reminders || [] };
         cmds.push({ do: 'reminder_cancel', text: match });
         return { ok: true, cancelled: match };
+      },
+    }),
+    mac_search: tool({
+      description: "Search for something on a site in the owner's Mac browser and open the results: YouTube, Google " +
+        '(the default), Perplexity, X, Reddit, Amazon, GitHub, Wikipedia or Maps. ' +
+        'Use it when they ask to look something up or search on a site, or on their Mac or browser.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { query: { type: 'string' }, site: { type: 'string', enum: Object.keys(SEARCH_URLS) } },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      execute: async ({ query, site }) => {
+        if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
+        const q = String(query || '').trim().slice(0, 200);
+        if (!q) return { ok: false, error: 'Nothing to search for: ask the owner what' };
+        cmds.push({ do: 'mac', action: 'url', target: SEARCH_URLS[site || 'google'] + encodeURIComponent(q) });
+        return { ok: true, opened: `${site || 'google'} results for ${q}` };
       },
     }),
     mac_copy: tool({
@@ -592,7 +610,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|(copy|clipboard)|(on|at) my screen|this (error|page|code|message)|(sleep|mute|unmute) (my |the )?(mac|computer|laptop)|hide (everything|all)|mac volume|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|(search|look up)\b.*\b(on|in) (youtube|google|perplexity|x|twitter|reddit|amazon|github|wikipedia|maps|my mac|the browser)\b|(copy|clipboard)|(on|at) my screen|this (error|page|code|message)|(sleep|mute|unmute) (my |the )?(mac|computer|laptop)|hide (everything|all)|mac volume|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 // "Remind me to reset my limits in half an hour", "set a reminder for 3pm": set_reminder, never a timer.
@@ -668,6 +686,12 @@ export function decodePlan(request) {
   return { todo: p.todo, done: p.done, projects: p.projects.map(([name, stage]) => ({ name, stage })) };
 }
 
+const SEARCH_URLS = {
+  google: 'https://www.google.com/search?q=', youtube: 'https://www.youtube.com/results?search_query=',
+  perplexity: 'https://www.perplexity.ai/search?q=', x: 'https://x.com/search?q=', reddit: 'https://www.reddit.com/search/?q=',
+  amazon: 'https://www.amazon.co.uk/s?k=', github: 'https://github.com/search?q=', wikipedia: 'https://en.wikipedia.org/w/index.php?search=',
+  maps: 'https://www.google.com/maps/search/',
+};
 const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't running)";
 
 // Dictation: "dictation mode" makes KEY recordings type on the Mac (X-Dictate from the board) until
@@ -1040,7 +1064,8 @@ export async function POST(request) {
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         (deviceContext.mac
           ? "The owner's Mac is connected: use mac_control to lock it, sleep it, hide its windows, open or close an app or site, " +
-            'or change its volume, then confirm in a few words. Use mac_copy when asked to copy something or put it on the clipboard. ' +
+            'or change its volume, then confirm in a few words. To look something up on a site ("open YouTube and search for X", ' +
+            '"look up X on Google"), use mac_search once; it opens the results, no separate open needed. Use mac_copy when asked to copy something or put it on the clipboard. ' +
             "Use look_at_screen for any question about what is on their screen (\"what's this error?\"), then just say you're taking a look. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
             'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly, without changing the screen. '
