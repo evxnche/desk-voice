@@ -763,6 +763,15 @@ export function memoryAcknowledgement(namedTool, cmds, fallback) {
   return fallback;
 }
 
+// "Put that on my clipboard": the whole last answer, as said. The model tends to copy only the gist ("Paris").
+const COPY_THAT = /\b(copy|clipboard)\b/i;
+const JUST_PART = /\b(just|only) (the|that|its?)\b|\b(link|number|address|name|code|command|word)\b/i;
+export function copyLastAnswer(heard, history, cmds) {
+  const copy = cmds.find((c) => c.do === 'mac' && c.action === 'copy');
+  const last = history.findLast((m) => m.role === 'assistant')?.content;
+  if (copy && last && COPY_THAT.test(heard) && !JUST_PART.test(heard)) copy.target = last.slice(0, 2000);
+}
+
 export function applyBoardBackstops(heard, namedTool, cmds, view, changes, used) {
   if (namedTool) return;
   // Action requests can still work when the model omits a tool call.
@@ -1072,6 +1081,7 @@ export async function POST(request) {
     text = result.text;
     const used = result.steps.flatMap((st) => st.toolCalls.map((c) => c.toolName));
     applyBoardBackstops(heard, namedTool, cmds, view, changes, used);
+    copyLastAnswer(heard, history, cmds);
     // A short reply to the gadget's own offer still starts the promised session.
     if (!namedTool && offered?.minutes && AFFIRM.test(heard) && !cmds.some((c) => c.do === 'timer')) {
       cmds.push({ do: 'timer', minutes: offered.minutes, label: offered.label });

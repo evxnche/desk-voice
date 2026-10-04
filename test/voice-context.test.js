@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sentences } from '../api/look.js';
-import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, dictation, firstToolFor, minutesUntil, TIMED_REMINDER,
+import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, copyLastAnswer, decodeDeviceContext, decodeMac, dictation, firstToolFor, minutesUntil, TIMED_REMINDER,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
 const header = (value) => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -296,4 +296,14 @@ test('reminder clock times count from UK time, rolling over to tomorrow', () => 
   assert.equal(minutesUntil('15:00', true, at), 25 * 60);
   assert.equal(minutesUntil('09:00', true, at), 19 * 60);
   assert.ok(Number.isNaN(minutesUntil('25:00', false, at)));
+});
+
+test('"put that on my clipboard" copies the whole last answer; "just the number" keeps the model\'s pick', () => {
+  const history = [{ role: 'user', content: 'capital of France?' }, { role: 'assistant', content: 'The capital of France is Paris.' }];
+  const cmds = [{ do: 'mac', action: 'copy', target: 'Paris' }];
+  copyLastAnswer('Put that on my clipboard.', history, cmds);
+  assert.equal(cmds[0].target, 'The capital of France is Paris.');
+  const part = [{ do: 'mac', action: 'copy', target: '020 7946 0000' }];
+  copyLastAnswer('copy just the number', history, part);
+  assert.equal(part[0].target, '020 7946 0000');
 });
