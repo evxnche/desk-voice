@@ -60,6 +60,11 @@ def resolve_needs(agent, project):
     key = ("needs", agent or "Your agent", project or "")
     queue[:] = [item for item in queue if item["key"] != key]
 
+def from_mac(kind, text):
+    """The Mac helper's lines: "screen" (the answer to "what's this error?") goes first and always gets
+    through; the procrastination cop's "cop" / "proud" wait their turn, but a focus timer doesn't stop them."""
+    _add(kind, text, first=kind == "screen", urgent=kind == "screen", interrupt_focus=True)
+
 def flight_news(text):
     """The tracked flight took off, started coming down or landed (tracker.py)."""
     _add("flight", text)

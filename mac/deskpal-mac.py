@@ -4,11 +4,18 @@
 - Checks in with the board every CHECK_IN_S (sooner when something changes): this Mac's address and
   what each recent Claude Code session is doing, from the turns/ files deskpal-notify.py keeps.
 - Listens on PORT for the board's voice commands: POST /do?k=KEY {"action": "lock"} or
-  {"action": "open", "target": "ezwrite"}.
+  {"action": "open", "target": "ezwrite"} (see run() for the rest). "screen" sends a screenshot to
+  desk-voice's /api/look and has the board speak the answer.
+- The procrastination cop: notes the app in front (and the site, in a browser) every few seconds;
+  after NAG_AFTER of YouTube and the like in work hours the Pal tells you off, and at PROUD_AT on a
+  focused day it says it's proud of you.
+
+macOS asks once each to allow: Screen Recording ("what's this error?"), Accessibility (typing),
+and control of System Events and the browsers (hiding windows, reading the site in front).
 
 Lives next to notify.py in ~/.claude/deskpal and shares its key and board-ip files.
 """
-import difflib, glob, json, os, re, socket, subprocess, threading, time, urllib.request
+import datetime, difflib, glob, json, os, random, re, socket, subprocess, tempfile, threading, time, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -19,6 +26,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(HERE, "key")).read().strip()
 IP_CACHE = os.path.join(HERE, "board-ip")
 TURNS = os.path.join(HERE, "turns")
+LOOK_URL = "https://desk-voice.vercel.app/api/look"
+UTF8 = dict(os.environ, LANG="en_US.UTF-8")   # launchd sets no locale, and pbcopy then mangles accents
 
 # Things to open that aren't apps in /Applications, by name without spaces (as transcribed: "easy write").
 SITES = {"ezwrite": "https://ezwrite.xyz", "easywrite": "https://ezwrite.xyz"}
@@ -98,11 +107,60 @@ def find(name):
     return known[close[0]]
 
 
+def osascript(script):
+    subprocess.run(["osascript", "-e", script], check=True, capture_output=True)
+
+
+def say_on_board(kind, text):
+    """Have the Pal say `text`: kind "screen" (an answer), "cop" or "proud"."""
+    body = json.dumps({"kind": kind, "text": text}).encode()
+    req = urllib.request.Request("http://%s/mac/say?k=%s" % (board_ip(), KEY), data=body, method="POST")
+    urllib.request.urlopen(req, timeout=5).read()
+
+
+def look(question):
+    """Screenshot the main display, ask desk-voice about it, and have the board speak the answer."""
+    with tempfile.TemporaryDirectory() as tmp:
+        shot = os.path.join(tmp, "screen.jpg")
+        subprocess.run(["screencapture", "-x", "-m", "-t", "jpg", shot], check=True)
+        subprocess.run(["sips", "-Z", "1600", "-s", "formatOptions", "70", shot], check=True, capture_output=True)
+        with open(shot, "rb") as f:
+            image = f.read()
+    url = "%s?k=%s&q=%s" % (LOOK_URL, KEY, urllib.parse.quote(question))
+    req = urllib.request.Request(url, data=image, method="POST", headers={"Content-Type": "image/jpeg"})
+    text = json.load(urllib.request.urlopen(req, timeout=60))["text"]
+    say_on_board("screen", text)
+
+
+def type_text(text):
+    """Type into whatever is in front by pasting, then put the clipboard back as it was."""
+    before = subprocess.run(["pbpaste"], capture_output=True, env=UTF8).stdout
+    subprocess.run(["pbcopy"], input=text.encode(), check=True, env=UTF8)
+    osascript('tell application "System Events" to keystroke "v" using command down')
+    time.sleep(0.5)
+    subprocess.run(["pbcopy"], input=before, env=UTF8)
+
+
 def run(action, target):
-    print(action, target, flush=True)
+    print(action, "(%d chars)" % len(target) if action in ("copy", "type", "screen") else target, flush=True)
     if action == "lock":
         # Sleeping the display locks the Mac: its screen lock is set to "immediately".
         subprocess.run(["pmset", "displaysleepnow"], check=True)
+    elif action == "sleep":
+        subprocess.run(["pmset", "sleepnow"], check=True)
+    elif action == "hide_all":
+        osascript('tell application "System Events" to set visible of every process whose visible is true '
+                  'and name is not "Finder" to false')
+    elif action == "volume":
+        osascript("set volume output volume %d without output muted" % max(0, min(100, int(target))))
+    elif action in ("mute", "unmute"):
+        osascript("set volume output muted %s" % ("true" if action == "mute" else "false"))
+    elif action == "copy":
+        subprocess.run(["pbcopy"], input=target.encode(), check=True, env=UTF8)
+    elif action == "type":
+        type_text(target)
+    elif action == "screen":
+        threading.Thread(target=look, args=(target or "What's on my screen?",), daemon=True).start()
     elif action in ("open", "close"):
         name = target.strip()
         if not re.fullmatch(r"[\w .'&+-]{1,40}", name):
@@ -118,6 +176,96 @@ def run(action, target):
             subprocess.run(["osascript", "-e", 'quit app "%s"' % what], check=True, capture_output=True)
     else:
         raise ValueError("unknown action")
+
+
+# The procrastination cop.
+DISTRACTIONS = {"youtube.com": "YouTube", "x.com": "X", "twitter.com": "Twitter", "reddit.com": "Reddit",
+                "instagram.com": "Instagram", "tiktok.com": "TikTok", "netflix.com": "Netflix",
+                "facebook.com": "Facebook", "twitch.tv": "Twitch"}
+DISTRACTING_APPS = {}                  # app name -> what to call it, e.g. {"TV": "Apple TV"}
+BROWSERS = {"Arc": 'tell application "Arc" to get URL of active tab of front window',
+            "Comet": 'tell application "Comet" to get URL of active tab of front window',
+            "Google Chrome": 'tell application "Google Chrome" to get URL of active tab of front window',
+            "Safari": 'tell application "Safari" to get URL of front document'}
+WORK_DAYS, WORK_HOURS = range(0, 5), (9, 18)   # Monday-Friday, 9am-6pm
+NAG_AFTER = 15 * 60                    # this long on distractions (breaks under BREAK_OK don't count) gets a nag
+BREAK_OK = 2 * 60                      # this long away from them starts the count again
+AWAY_IDLE = 20 * 60                    # no mouse or keys for this long: not at the Mac
+PROUD_AT = (17, 30)
+PROUD_IF = (3 * 3600, 20 * 60)         # at least this much work and at most this much distraction today
+
+NAGS = ("You've been on {site} for {m} minutes. I'm watching you. Back to work.",
+        "{m} minutes of {site}. Your agents are working harder than you are right now.",
+        "Hey. {site}. {m} minutes. Close it.",
+        "That's {m} minutes on {site}. Claude didn't sign up to do all the work alone.",
+        "{m} minutes on {site}? I'm not angry, just disappointed. Okay, I'm a bit angry.")
+PROUDS = ("Great focus day: {h} hours of work and only {m} minutes of distractions. I'm proud of you.",
+          "{h} hours of real work today and barely any scrolling. Nice one.",
+          "Focus level today: crab-tastic. {h} hours in and hardly any distractions.")
+
+
+def front_app():
+    out = subprocess.run(["lsappinfo", "info", "-only", "name", subprocess.run(
+        ["lsappinfo", "front"], capture_output=True, text=True).stdout.strip()], capture_output=True, text=True).stdout
+    m = re.match(r'\s*"([^"]*)"', out)
+    return m.group(1) if m else ""
+
+
+def idle_seconds():
+    out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True).stdout
+    m = re.search(r'"HIDIdleTime" = (\d+)', out)
+    return int(m.group(1)) / 1e9 if m else 0
+
+
+def distraction():
+    """What's distracting you right now ("YouTube"), or None."""
+    app = front_app()
+    if app in DISTRACTING_APPS:
+        return DISTRACTING_APPS[app]
+    if app in BROWSERS:
+        try:
+            url = subprocess.run(["osascript", "-e", BROWSERS[app]], capture_output=True, text=True, timeout=3).stdout
+        except subprocess.TimeoutExpired:
+            return None
+        host = urllib.parse.urlparse(url.strip()).hostname or ""
+        for domain, name in DISTRACTIONS.items():
+            if host == domain or host.endswith("." + domain):
+                return name
+    return None
+
+
+class Cop:
+    def __init__(self):
+        self.day, self.last = None, time.time()
+
+    def tick(self):
+        now = time.time()
+        dt, self.last = min(30, now - self.last), now     # capped: the Mac may have slept in between
+        today = datetime.datetime.now()
+        if self.day != today.date():
+            self.day, self.work, self.wasted, self.proud = today.date(), 0, 0, False
+            self.streak, self.clean, self.next_nag = 0, 0, NAG_AFTER
+        if today.weekday() not in WORK_DAYS or not WORK_HOURS[0] <= today.hour < WORK_HOURS[1]:
+            return
+        if idle_seconds() > AWAY_IDLE:
+            return
+        site = distraction()
+        if site:
+            self.streak += dt
+            self.wasted += dt
+            self.clean = 0
+            if self.streak >= self.next_nag:
+                self.next_nag += NAG_AFTER
+                say_on_board("cop", random.choice(NAGS).format(site=site, m=int(self.streak // 60)))
+        else:
+            self.work += dt
+            self.clean += dt
+            if self.clean >= BREAK_OK:
+                self.streak, self.next_nag = 0, NAG_AFTER
+        if not self.proud and (today.hour, today.minute) >= PROUD_AT and \
+                self.work >= PROUD_IF[0] and self.wasted <= PROUD_IF[1]:
+            self.proud = True
+            say_on_board("proud", random.choice(PROUDS).format(h=int(self.work // 3600), m=int(self.wasted // 60)))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -149,12 +297,16 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    sent, last = None, 0
+    sent, last, cop = None, 0, Cop()
     while True:
         sessions = claude_sessions()
         if sessions != sent or time.time() - last >= CHECK_IN_S:
             check_in(sessions)                # board unreachable: tried again on the next change or minute
             sent, last = sessions, time.time()
+        try:
+            cop.tick()
+        except Exception as e:
+            print("cop:", e, flush=True)
         time.sleep(5)
 
 

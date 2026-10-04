@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, firstToolFor,
+import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, dictation, firstToolFor,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
 const header = (value) => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -232,4 +232,32 @@ test('"what\'s Claude doing?" keeps the screen as it is', () => {
   const other = [{ do: 'screen', name: 'plan' }];
   applyBoardBackstops('show my plan', null, other, { radius: 20 }, {}, ['show_screen']);
   assert.deepEqual(other, [{ do: 'screen', name: 'plan' }]);
+});
+
+test('dictation: mode on and off, a typed line, and everything typed while the mode is on', () => {
+  assert.deepEqual(dictation('dictation mode', false, true).board, [{ do: 'dictate', on: true }]);
+  assert.deepEqual(dictation('stop dictation', true, true), { text: 'Dictation off.', board: [{ do: 'dictate', on: false }] });
+  assert.deepEqual(dictation('Type: see you at five.', false, true),
+    { typed: 'see you at five.', board: [{ do: 'mac', action: 'type', target: 'see you at five.' }] });
+  assert.deepEqual(dictation('What is the weather?', true, true).board, [{ do: 'mac', action: 'type', target: 'What is the weather?' }]);
+  assert.equal(dictation('What is the weather?', false, true), null);
+  assert.equal(dictation('what type of crab is the Pal?', false, true), null);
+  assert.match(dictation('dictation mode', false, false).text, /isn't connected/);
+});
+
+test('copy, screen and the other Mac actions queue the right board commands', async () => {
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null, mac: { claude: [] } });
+  assert.equal((await tools.mac_control.execute({ action: 'volume' })).ok, false);
+  await tools.mac_control.execute({ action: 'volume', level: 130 });
+  await tools.mac_control.execute({ action: 'mute' });
+  await tools.mac_control.execute({ action: 'hide_all', target: 'x' });
+  await tools.mac_copy.execute({ text: ' the answer ' });
+  await tools.look_at_screen.execute({ question: "what's this error?" });
+  assert.deepEqual(commands, [{ do: 'mac', action: 'volume', target: '100' }, { do: 'mac', action: 'mute' },
+    { do: 'mac', action: 'hide_all' }, { do: 'mac', action: 'copy', target: 'the answer' },
+    { do: 'mac', action: 'screen', target: "what's this error?" }]);
+  const offline = boardTools([], '', { memories: [], alert: null, mac: null });
+  assert.equal((await offline.mac_copy.execute({ text: 'x' })).ok, false);
+  assert.equal((await offline.look_at_screen.execute({ question: 'x' })).ok, false);
 });

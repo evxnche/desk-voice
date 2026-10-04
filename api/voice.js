@@ -415,19 +415,48 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       },
     }),
     mac_control: tool({
-      description: "Do something on the owner's Mac: lock it, open an app or site by name (e.g. ezwrite, Safari, Spotify), or close (quit) an app.",
+      description: "Do something on the owner's Mac: lock it, put it to sleep, hide every window (hide_all), " +
+        'open an app or site by name (e.g. ezwrite, Safari, Spotify), close (quit) an app, set its volume (level 0-100), mute or unmute it.',
       inputSchema: jsonSchema({
         type: 'object',
-        properties: { action: { type: 'string', enum: ['lock', 'open', 'close'] }, target: { type: 'string', description: 'What to open or close' } },
+        properties: {
+          action: { type: 'string', enum: ['lock', 'sleep', 'hide_all', 'open', 'close', 'volume', 'mute', 'unmute'] },
+          target: { type: 'string', description: 'The app or site to open or close' },
+          level: { type: 'integer', minimum: 0, maximum: 100, description: 'Volume percent' },
+        },
         required: ['action'],
         additionalProperties: false,
       }),
-      execute: async ({ action, target }) => {
-        if (!deviceContext.mac) return { ok: false, error: "The Mac isn't connected (asleep, off, or its helper isn't running)" };
+      execute: async ({ action, target, level }) => {
+        if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
         const clean = String(target || '').trim().slice(0, 40);
-        if (action !== 'lock' && !clean) return { ok: false, error: `Nothing to ${action}: ask the owner what` };
-        cmds.push({ do: 'mac', action, ...(action !== 'lock' && { target: clean }) });
+        if ((action === 'open' || action === 'close') && !clean) return { ok: false, error: `Nothing to ${action}: ask the owner what` };
+        if (action === 'volume' && !Number.isInteger(level)) return { ok: false, error: 'Give a volume from 0 to 100' };
+        cmds.push({ do: 'mac', action, ...((action === 'open' || action === 'close') && { target: clean }),
+          ...(action === 'volume' && { target: String(Math.min(100, Math.max(0, level))) }) });
+        return { ok: true, sent_to_mac: true };
+      },
+    }),
+    mac_copy: tool({
+      description: "Put text on the owner's Mac clipboard, ready to paste: usually your last answer, or the part of it they asked for.",
+      inputSchema: jsonSchema({ type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false }),
+      execute: async ({ text }) => {
+        if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
+        const clean = String(text || '').trim().slice(0, 2000);
+        if (!clean) return { ok: false, error: 'Nothing to copy' };
+        cmds.push({ do: 'mac', action: 'copy', target: clean });
         return { ok: true };
+      },
+    }),
+    look_at_screen: tool({
+      description: "Look at what is on the owner's Mac screen right now (an error, a page, some code) to answer their question about it. " +
+        'The answer arrives a few seconds later and the gadget speaks it, so just say you are taking a look.',
+      inputSchema: jsonSchema({ type: 'object', properties: { question: { type: 'string', description: "The owner's question, in their words" } },
+        required: ['question'], additionalProperties: false }),
+      execute: async ({ question }) => {
+        if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
+        cmds.push({ do: 'mac', action: 'screen', target: String(question || 'What is on my screen?').trim().slice(0, 300) });
+        return { ok: true, answer_comes_later: true };
       },
     }),
     spotify_play: tool({
@@ -491,8 +520,8 @@ const WAKE_SPELLINGS = {
 const ANY_WAKE = Object.values(WAKE_SPELLINGS).join('|');
 
 // Nothing to say: the board goes back to what it was doing.
-function ignored(heard) {
-  const body = Buffer.from(JSON.stringify({ heard, ignored: true }) + '\n');
+function ignored(heard, board = []) {
+  const body = Buffer.from(JSON.stringify({ heard, ignored: true, ...(board.length && { board }) }) + '\n');
   return new Response(body, {
     headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) },
   });
@@ -527,7 +556,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|(copy|clipboard)|(on|at) my screen|this (error|page|code|message)|(sleep|mute|unmute) (my |the )?(mac|computer|laptop)|hide (everything|all)|mac volume|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 export const PLANNY = /\b(add|put|mark|tick|cross|remove|delete|finish(ed)?|done|move|moved|start(ed)?)\b.*\b(tasks?|to-?dos?|list|projects?|pipeline|idea|ideas|building|testing|shipped)\b|\bremind me to\b/i;
@@ -598,6 +627,25 @@ export function decodePlan(request) {
   if (!p || !shortStrings(p.todo, 30) || !shortStrings(p.done, 30) || !Array.isArray(p.projects) || p.projects.length > 16 ||
       !p.projects.every((x) => shortStrings(x, 2) && x.length === 2 && STAGES.includes(x[1]))) return null;
   return { todo: p.todo, done: p.done, projects: p.projects.map(([name, stage]) => ({ name, stage })) };
+}
+
+const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't running)";
+
+// Dictation: "dictation mode" makes KEY recordings type on the Mac (X-Dictate from the board) until
+// "stop dictation"; "type see you at five" types one line from any recording.
+const DICTATE_ON = /\b(dictation mode|dictate mode|(start|turn on) dictat\w*)\b/i;
+const DICTATE_OFF = /\b(stop|end|exit|turn off|finish) dictat\w*\b|\bdictation off\b/i;
+const TYPE_LINE = /^\W*(type|dictate)\b[\s:,]+(.+)$/is;
+
+export function dictation(heard, dictating, macOnline) {
+  if (DICTATE_OFF.test(heard)) return { text: 'Dictation off.', board: [{ do: 'dictate', on: false }] };
+  if (dictating) return { typed: heard.trim(), board: [{ do: 'mac', action: 'type', target: heard.trim().slice(0, 2000) }] };
+  const line = TYPE_LINE.exec(heard);
+  if (!DICTATE_ON.test(heard) && !line) return null;
+  if (!macOnline) return { text: "I can't type on your Mac right now: it isn't connected." };
+  if (line) return { typed: line[2].trim(), board: [{ do: 'mac', action: 'type', target: line[2].trim().slice(0, 2000) }] };
+  return { text: "Dictation on. Hold the key and talk, and I'll type it on your Mac. Say gee gee, stop dictation, when you're done.",
+    board: [{ do: 'dictate', on: true }] };
 }
 
 // The owner's Mac (X-Mac, board/mac.py): present only while its helper is checking in, with what each
@@ -829,6 +877,8 @@ export async function POST(request) {
       return reply('', text, await speak(text), adpcm);
     }
   }
+  const dictating = request.headers.get('x-dictate') === '1';
+  if (dictating && !heard.trim()) return ignored(heard);
   if (!heard.trim()) {
     const text = "Sorry, I didn't catch that.";
     return reply('', text, await speak(text), adpcm, null, [], { huh: true });
@@ -837,6 +887,13 @@ export async function POST(request) {
   deviceContext.plan = decodePlan(request);
   deviceContext.volume = decodeVolume(request);
   deviceContext.mac = decodeMac(request);
+  const dictate = dictation(heard, dictating, Boolean(deviceContext.mac));
+  if (dictate) {
+    console.log('dictation:', heard);
+    // Typed lines come back silent (the board blips); turning dictation on or off is spoken.
+    if (dictate.typed) return ignored(heard, dictate.board);
+    return reply(heard, dictate.text, await speak(dictate.text), adpcm, null, dictate.board || []);
+  }
   const namedTool = firstToolFor(heard, Boolean(deviceContext.alert));
   if (!namedTool && FORGET.test(heard) && heard.split(/\s+/).length <= 8) {
     const text = "Okay, I've forgotten our conversation.";
@@ -909,7 +966,9 @@ export async function POST(request) {
         'When asked for the menu or what you can do, use show_screen with menu and just say it is on screen. ' +
         `Use set_volume when asked to change the speaker volume${deviceContext.volume == null ? '' : ` (it is ${deviceContext.volume} of 10 now)`}. ` +
         (deviceContext.mac
-          ? "The owner's Mac is connected: use mac_control to lock it, open an app or site, or close an app, then confirm in a few words. " +
+          ? "The owner's Mac is connected: use mac_control to lock it, sleep it, hide its windows, open or close an app or site, " +
+            'or change its volume, then confirm in a few words. Use mac_copy when asked to copy something or put it on the clipboard. ' +
+            "Use look_at_screen for any question about what is on their screen (\"what's this error?\"), then just say you're taking a look. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
             'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly, without changing the screen. '
           : "The owner's Mac isn't connected right now, so you can't control it or see what Claude Code is doing on it. ") +

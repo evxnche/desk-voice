@@ -297,6 +297,8 @@ def run(cmd):
         return audio.set_volume(audio.volume + int(step) if step else audio.volume if level is None else level)
     elif do == "mac":                      # "lock my Mac", "open ezwrite"
         return mac.do(cmd.get("action"), cmd.get("target") or "")
+    elif do == "dictate":                  # "dictation mode" / "stop dictation"
+        mac.dictate(bool(cmd.get("on")))
     elif do in PLAN_DO:                    # tasks and projects; each opens the plan screen
         ok = PLAN_DO[do](cmd)
         show("plan")
@@ -326,7 +328,7 @@ def handle(method, path, q, body):
     global active_alert
     # The remote page and its buttons are open to anyone on the home Wi-Fi. Mac agent alerts use the
     # shared key; Spotify token hand-offs use a token-specific signature so the key stays private.
-    if path in ("/agent", "/mac") and q.get("k") != secrets.VOICE_KEY:
+    if path in ("/agent", "/mac", "/mac/say") and q.get("k") != secrets.VOICE_KEY:
         return 401, "text/plain", "wrong or missing key"
     if path == "/spotify-token" and not music.verify_handoff(q.get("refresh"), q.get("sig")):
         return 401, "text/plain", "invalid Spotify handoff"
@@ -428,6 +430,13 @@ def handle(method, path, q, body):
         return 200, "application/json", '{"ok":true}'
     if path == "/mac":                       # the Mac helper checking in
         return 200, "application/json", json.dumps({"ok": mac.check_in(json.loads(body or b"{}"))})
+    if path == "/mac/say":                   # the Mac has something to say: a screen answer, the procrastination cop
+        a = json.loads(body or b"{}")
+        kind, text = a.get("kind"), str(a.get("text") or "")[:400]
+        if kind not in ("screen", "cop", "proud") or not text:
+            return 400, "application/json", '{"ok":false}'
+        companion.from_mac(kind, text)
+        return 200, "application/json", '{"ok":true}'
     if path == "/spotify-token" and q.get("refresh"):
         music.save_token(q["refresh"])
         show("music")
@@ -698,7 +707,8 @@ while True:
         if line:
             said = False
             try:
-                said = voice.say(line[1], boot, connect, tapped=key_tapped)
+                said = voice.say(line[1], boot, connect, tapped=key_tapped,
+                                 mood={"cop": "glare", "proud": "proud"}.get(line[0], "alert"))
                 if said == "interrupt" or (said is True and line[0] in companion.ASKS):
                     converse("interrupt")            # KEY tapped, or it asked you something: it listens
             except Exception as e:

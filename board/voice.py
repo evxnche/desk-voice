@@ -35,6 +35,8 @@ def _context_header(value):
 
 def _headers(wake, followup=False):
     hdrs = {"X-Audio": "adpcm"}       # ADPCM both ways: a quarter of the bytes of 16-bit PCM
+    if mac.dictating() and not wake and not followup:
+        hdrs["X-Dictate"] = "1"       # dictation mode: what you say while holding KEY is typed on the Mac
     if wake:
         hdrs["X-Wake"] = wake         # the recording starts with this phrase; the server checks it's there
     if followup:
@@ -257,6 +259,7 @@ class _Face:
         self.keep = keep          # over a screen an answer opened: the header Pal, not the full one
         self.bars, self.next, self.levels, self.caption = [], 0, [], []
         self.lines, self.page, self.played, self.total, self.huh = [], [], 0, 0, False
+        self.face = "speak"       # or the procrastination cop's "glare" / "proud"
 
     def _due(self, ms=100):
         now = time.ticks_ms()
@@ -298,7 +301,7 @@ class _Face:
             self.next = 0
             pal.header("talk")
         else:
-            pal.draw("huh" if huh else "speak", 0, self.page)
+            pal.draw("huh" if huh else self.face, 0, self.page)
 
     def voiced(self, chunks):
         """Pass the reply's PCM through, noting each chunk's loudness for the mouth."""
@@ -322,7 +325,7 @@ class _Face:
             page = pal.caption_page(self.lines, max(0, self.played - audio.TX_BUF) / self.total)
         if page != self.page:
             self.page = page
-            pal.draw("huh" if self.huh else "speak", level, page)
+            pal.draw("huh" if self.huh else self.face, level, page)
         else:
             pal.speak_update(level, self.huh)
 
@@ -476,6 +479,9 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
         if meta.get("ignored"):                      # a look-alike woke it, or nothing followed the phrase
             if stream:
                 stream.quit = True
+            if meta.get("board"):                    # dictation: typed on the Mac, a blip says so
+                _run_board_commands(meta["board"], run)
+                audio.play(audio.tone((988,), 90), volume=0xC8)
             return "quiet" if followup else "back"
         if meta.get("forget"):                       # "forget that"
             history.clear()
@@ -513,13 +519,13 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
 
 SAY_URL = secrets.VOICE_URL.replace("/api/voice", "/api/say") + "?k=" + secrets.VOICE_KEY
 
-def say(text, boot, connect, tapped=None):
+def say(text, boot, connect, tapped=None, mood="alert"):
     """Speak up unprompted (companion.py): the Pal hops with a "!" while desk-voice turns `text` into
     Ara's voice, then says it with the words underneath. False if it couldn't (no Wi-Fi, a server
     without /api/say) or BOOT stopped it, "interrupt" if a KEY tap did (you want to talk)."""
     back = lambda: not boot.value()
     lines = pal.caption_page(pal.wrap(text), 0)
-    pal.draw("alert", 0, lines)
+    pal.draw(mood, 0, lines)
     if not connect():
         return False
     box = {}
@@ -527,7 +533,7 @@ def say(text, boot, connect, tapped=None):
     phone.hush(True)
     try:
         if not _post((text.encode(), box, {"X-Audio": "adpcm"}, SAY_URL), box, back,
-                     lambda: face._due() and pal.draw("alert", 0, lines)):
+                     lambda: face._due() and pal.draw(mood, 0, lines)):
             return False
         if "error" in box or box["status"] != 200:
             print("say failed:", box.get("error") or box["status"])
@@ -536,6 +542,8 @@ def say(text, boot, connect, tapped=None):
         nl = _head_end(body)
         box["adpcm"] = json.loads(body[:nl]).get("audio") == "adpcm"
         sound, total = _sound(box, body, nl)
+        if mood != "alert":
+            face.face = mood
         face.speaking(text, False, total)
         ended = _speak(face.voiced(sound), back, tapped, face.mouth)
         if ended == "back":

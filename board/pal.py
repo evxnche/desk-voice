@@ -3,7 +3,8 @@
 # and 9 rows 2-3, legs cols 1, 3, 6, 8 rows 6-7, square eyes cut out at cols 2 and 7 of row 2
 # (the same geometry as the "Meet the Pal" mock-up page).
 # Moods: idle, hears, sleep (on the Pal screen, from how loud the mic hears the room; nothing is
-# recorded) and listen, think, speak, huh, alert, waiting (drawn by voice.py while it works).
+# recorded) and listen, think, speak, huh, alert, waiting (drawn by voice.py while it works), plus
+# glare and proud while it speaks for the procrastination cop (mac/deskpal-mac.py).
 import time, math
 import dashboard, room, audio, font5
 
@@ -27,6 +28,7 @@ def _eye(c, ex, ey, e):
 OPEN = ("open", 1.0, 1.0, 0, 0)
 WIDE = ("open", 1.2, 1.0, 0, 0)
 CLOSED = ("closed",)
+SLIT = ("open", 1.0, 0.3, 0, 3)
 HUH_L, HUH_R = ("open", 1.0, 1.0, -3, -3), ("open", 1.0, 0.35, -3, -3)
 
 def crab(c, bob=0, la=0.0, ra=0.0, sit=False, step=None, left=OPEN, right=OPEN, mouth=None, opened=0.0):
@@ -119,6 +121,15 @@ def draw(mood, level=0.0, caption=(), status="", bars=None, t=None, hint=""):
                       mouth="wavy" if huh and level < 0.15 else "talk", opened=level)
         if huh:
             d.text_large("?", X0 + 10 * U + 10, y0 - 50 + int(math.sin(t * 3) * 3), 5)
+    elif mood in ("glare", "proud"):
+        # Speaking like "speak" (speak_update() redraws only the mouth), with a face to match the words.
+        glare = mood == "glare"
+        x0, y0 = crab(c, la=0 if glare else 2.5, ra=0 if glare else 2.5, left=SLIT if glare else CLOSED,
+                      right=SLIT if glare else CLOSED, mouth="talk", opened=level)
+        if glare:                                    # brows slanting down to the middle
+            for ex, side in ((x0 + 45, 1), (x0 + 135, -1)):
+                c.fill_rect(ex - 12 if side == 1 else ex + 2, y0 + 24, 10, 4, 0)
+                c.fill_rect(ex - 2 if side == 1 else ex - 8, y0 + 28, 10, 4, 0)
     elif mood == "alert":
         hop = abs(math.sin(t * 6))
         flip = int(t * 4) % 2
