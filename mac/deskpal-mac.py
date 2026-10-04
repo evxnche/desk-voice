@@ -179,6 +179,24 @@ def arc_tab(tab_id):
         return None
 
 
+def youtube_result(rank):
+    """The rank-th video on the YouTube results page this helper last opened (else the tab in front), in
+    the order the owner sees: YouTube orders results differently on every fetch, so the server's own
+    search can disagree about "the second video". None without such a page, or if Arc won't run it."""
+    js = ("(()=>{const s=[];for(const a of document.querySelectorAll('ytd-video-renderer a#video-title'))"
+          "{const h=a.href||'';if(h.includes('/watch?v=')&&!s.includes(h))s.push(h)}return s[%d]||''})()" % (rank - 1))
+    for ref in (['tab id "%s" of front window' % _opened_tab[0]] if _opened_tab[0] else []) + ["active tab of front window"]:
+        try:
+            if "youtube.com/results" not in arc("get URL of " + ref):
+                continue
+            found = re.match(r"https://www\.youtube\.com/watch\?v=[\w-]{11}", arc('execute %s javascript "%s"' % (ref, js)))
+            if found:
+                return found.group(0)
+        except (subprocess.TimeoutExpired, OSError) as e:   # closed tab, or JavaScript from Apple Events off
+            print("   results page:", e, flush=True)
+    return None
+
+
 def open_page(url):
     """A new tab in Arc's front window, remembered for "close that tab"; any other browser via open."""
     try:
@@ -248,6 +266,13 @@ def run(action, target):
         if not re.fullmatch(r"https://[^\s\"']{1,500}", target):
             raise ValueError("not a web address")
         open_page(target)
+    elif action == "video":               # {"url": the server's pick, "rank": a position asked for, if any}
+        want = json.loads(target)
+        url = (youtube_result(int(want["rank"])) if want.get("rank") else None) or want.get("url", "")
+        if not re.fullmatch(r"https://www\.youtube\.com/watch\?v=[\w-]{11}", url):
+            raise ValueError("not a YouTube video")
+        print("  ->", url, flush=True)
+        open_page(url)
     elif action == "close_tab":
         close_tab(target.strip())
     elif action == "screen":

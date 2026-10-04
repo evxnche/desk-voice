@@ -545,7 +545,8 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       inputSchema: jsonSchema({
         type: 'object',
         properties: { query: { type: 'string' },
-                      rank: { type: 'integer', minimum: 1, maximum: 10, description: 'Which result: 1 = top (the default), 2 = second...' } },
+                      rank: { type: 'integer', minimum: 1, maximum: 10,
+                              description: 'Only when they name a position: "the second video" is 2, "the first one" is 1' } },
         required: ['query'],
         additionalProperties: false,
       }),
@@ -554,10 +555,14 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         const q = String(query || '').trim().slice(0, 200);
         if (!q) return { ok: false, error: 'No video named: ask the owner which one' };
         try {
-          const video = await youTubeVideo(q, Number.isInteger(rank) ? Math.min(10, Math.max(1, rank)) : 1);
-          if (!video) return { ok: false, error: `No YouTube video found for ${q}${rank > 1 ? ` at position ${rank}` : ''}` };
-          cmds.push({ do: 'mac', action: 'url', target: `https://www.youtube.com/watch?v=${video.id}` });
-          return { ok: true, playing: video.title };
+          const position = Number.isInteger(rank) ? Math.min(10, Math.max(1, rank)) : null;
+          const video = await youTubeVideo(q, position || 1, deviceContext.country);
+          if (!video) return { ok: false, error: `No YouTube video found for ${q}${position > 1 ? ` at position ${position}` : ''}` };
+          // A position is taken from the results page open on the Mac (YouTube's order differs per
+          // fetch); this video is the fallback, and what plays for a video asked for by name.
+          cmds.push({ do: 'mac', action: 'video',
+                      target: JSON.stringify({ url: `https://www.youtube.com/watch?v=${video.id}`, ...(position && { rank: position }) }) });
+          return { ok: true, playing: position ? `video ${position} of the results` : video.title };
         } catch (e) {
           return { ok: false, error: e.message };
         }
@@ -771,8 +776,10 @@ const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't r
 
 // The rank-th video (1 = top) for a YouTube search, read from the results page (no API key). The
 // consent cookie skips the EU cookie page; the browser UA gets the full page with the results in it.
-export async function youTubeVideo(query, rank = 1) {
-  const r = await fetch(SEARCH_URLS.youtube + encodeURIComponent(query), {
+// `country` (the board's, from Vercel's IP lookup) orders results as the owner sees them: searched from
+// the server's region, "the second video" was a different one (2026-10-04).
+export async function youTubeVideo(query, rank = 1, country = '') {
+  const r = await fetch(SEARCH_URLS.youtube + encodeURIComponent(query) + (country ? `&gl=${country}` : ''), {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
                'Accept-Language': 'en-GB,en;q=0.9', Cookie: 'SOCS=CAI; CONSENT=YES+' },
     signal: AbortSignal.timeout(6000),
@@ -1112,6 +1119,7 @@ export async function POST(request) {
     return reply('', text, await speak(text), adpcm, null, [], { huh: true });
   }
   const deviceContext = decodeDeviceContext(request);
+  deviceContext.country = /^[A-Z]{2}$/.test(request.headers.get('x-vercel-ip-country') || '') ? request.headers.get('x-vercel-ip-country') : '';
   deviceContext.plan = decodePlan(request);
   deviceContext.volume = decodeVolume(request);
   deviceContext.mac = decodeMac(request);
