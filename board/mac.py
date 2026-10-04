@@ -59,6 +59,12 @@ def do(action, target=""):
         return False
     if action == "type":
         dictate(dictating())                  # still dictating? then for another 10 minutes
-    _thread.stack_size(20 * 1024)
-    _thread.start_new_thread(_send, (json.dumps({"action": action, "target": target}).encode(),))
+    body = json.dumps({"action": action, "target": target}).encode()
+    try:
+        _thread.stack_size(20 * 1024)
+        _thread.start_new_thread(_send, (body,))
+    except OSError:
+        # No block big enough for the stack ("can't create thread"), e.g. a reply with two Mac
+        # commands while the reply is still downloading: send it from this thread instead.
+        _send(body)
     return True
