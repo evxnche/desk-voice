@@ -8,7 +8,7 @@ import noty_sync, noty_notes
 esp32.Partition.mark_app_valid_cancel_rollback()
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
-REFRESH_MS = 5 * 60 * 1000   # auto refresh; KEY refreshes on demand
+REFRESH_MS = 5 * 60 * 1000   # clock sync retry; limits are fetched only on demand (fetch_due)
 
 key = Pin(18, Pin.IN, Pin.PULL_UP)
 boot = Pin(0, Pin.IN, Pin.PULL_UP)
@@ -230,7 +230,7 @@ shows = 0     # show() calls so far: tells a conversation whether an answer open
 
 def show(name):
     """Switch to a screen (from BOOT, the remote page or a voice command)."""
-    global screen, home_screen, shows
+    global screen, home_screen, shows, fetch_due
     shows += 1
     if name != "plan":
         plan.section = None
@@ -238,6 +238,8 @@ def show(name):
         menu.page = 0
     if name in SCREENS:
         home_screen = name
+    if name == "limits":
+        fetch_due = True                 # limits only on demand: fresh numbers each time it's opened
     screen = name
     redraw()
 
@@ -468,7 +470,7 @@ def handle(method, path, q, body):
 
 def connect_agent(path, q):
     """Sign-in steps from the remote page's Connect buttons (Claude, Codex, Grok, and pasted keys)."""
-    global next_fetch
+    global fetch_due
     try:
         if path == "/connect/claude" and q.get("code"):
             usage.claude_finish(q["code"])
@@ -491,7 +493,7 @@ def connect_agent(path, q):
             return {"error": "unknown step"}
     except Exception as e:
         return {"error": str(e)}
-    next_fetch = time.ticks_ms()          # show the new numbers right away
+    fetch_due = True                      # show the new numbers right away
     return {"ok": True}
 
 pending_alert = []    # bounded alert snapshots waiting to chime (the HTTP handler must answer fast)
@@ -586,14 +588,15 @@ try:
     phone.start()                        # iPhone notifications over Bluetooth
 except Exception as e:
     print("bluetooth failed:", e)
-footer = fetch()
+footer = ""                          # limits.json until they're asked for (fetch_due)
+fetch_due = False
 clock_ok = sync_clock()
 companion.check_limits(last)
 pal.ambient.on_hear = lambda: companion.heard_you(last)
 tracker.on_news = companion.flight_news
 checked_minute = None
 redraw()
-next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
+next_clock_try = time.ticks_add(time.ticks_ms(), REFRESH_MS)
 shown_minute = None
 weather_seen = room.version
 
@@ -661,14 +664,12 @@ while True:
     elif action == "tap" and screen == "pal":
         footer = fetch()                         # fresh limits on the status line
         companion.check_limits(last)
-        next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
         pal.ambient.enter()
     elif action == "tap":
         screen = "limits"
         show_limits("refreshing...")
         footer = fetch()
         show_limits(footer)
-        next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     elif action == "hold":
         result, on_screen = None, False
         try:
@@ -708,14 +709,17 @@ while True:
         next_wifi_try = time.ticks_add(time.ticks_ms(), 30000)
         if connect():
             redraw()
-    if time.ticks_diff(time.ticks_ms(), next_fetch) >= 0:
+    if fetch_due:                        # the limits screen was opened, or an agent connected
+        fetch_due = False
+        if screen == "limits":
+            show_limits("refreshing...")
         footer = fetch()
         companion.check_limits(last)
-        if not clock_ok:
-            clock_ok = sync_clock()
         if screen == "limits":
             show_limits(footer)
-        next_fetch = time.ticks_add(time.ticks_ms(), REFRESH_MS)
+    if not clock_ok and time.ticks_diff(time.ticks_ms(), next_clock_try) >= 0:
+        clock_ok = sync_clock()
+        next_clock_try = time.ticks_add(time.ticks_ms(), REFRESH_MS)
     # Weather for every screen (the Pal's status line, rain warnings), not just "today"; the today
     # screen fetches its own after drawing, so switching there stays instant.
     tracker.tick(connect, screen == "track")     # also off-screen: take-off / landing lines

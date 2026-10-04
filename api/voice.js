@@ -654,6 +654,8 @@ function ignored(heard, board = []) {
 const TTS_MODEL = process.env.TTS_MODEL || 'spacexai/grok-tts';
 const TTS_VOICE = process.env.TTS_VOICE || (TTS_MODEL.startsWith('openai/') ? 'alloy' : 'ara');
 
+let yesPcm = null;   // the spoken "Yes?" after a bare wake phrase
+
 export async function speak(text) {
   const openai = TTS_MODEL.startsWith('openai/');
   const speech = await generateSpeech({
@@ -1072,7 +1074,8 @@ export async function POST(request) {
       // Just "gee gee", then a pause for the board to respond: ask, and the board listens for the
       // question without the wake phrase (its reply window). Dropping these lost 2 of 3 real tries.
       const text = 'Yes?';
-      return reply('', text, await speak(text), adpcm);
+      yesPcm ??= await speak(text);   // the same every time: made once per warm instance (~0.5-1 s each)
+      return reply('', text, yesPcm, adpcm);
     }
   }
   const dictating = request.headers.get('x-dictate') === '1';

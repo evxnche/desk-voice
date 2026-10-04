@@ -278,7 +278,8 @@ def _mean_abs(buf: ptr16, n: int) -> int:
 def record_speech(max_seconds, heard, stop=None, progress=None):
     """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
     recognised, which holds the phrase and maybe the whole question ("gee gee, what's the weather"),
-    until ~0.8 s of quiet follows speech, or 4 s pass with none. Speech = louder than 3x the room's
+    until ~0.8 s of quiet follows speech, or 1.5 s pass with none (then the server says "Yes?" and the
+    reply window takes the question; waiting 4 s made a bare "gee gee" take ~7 s to answer). Speech = louder than 3x the room's
     background level (and than 15: in a quiet room speech measured only 20-50, so the old floor of 40
     cut questions short or waited out the 4 s). Returns mono PCM, or None if `stop()` fired.
     `progress(mv, n)` hears about each new frame (voice.py uploads it as it's recorded)."""
@@ -313,7 +314,7 @@ def record_speech(max_seconds, heard, stop=None, progress=None):
             n += frame
             if progress:
                 progress(mv, n)
-            if quiet >= (12 if spoke else 62):    # 0.8 s after speech, or 4 s of none
+            if quiet >= (12 if spoke else 23):    # 0.8 s after speech, or 1.5 s of none
                 break
     finally:
         _pause_listener()                         # free core 0 for Wi-Fi while the reply comes back
