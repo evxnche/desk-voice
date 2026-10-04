@@ -1,5 +1,5 @@
 """Private task sync. Network workers publish results; only the main loop changes plan."""
-import json, os, time, binascii, _thread
+import io, json, os, re, time, binascii, hashlib, _thread
 
 CONFIG_FILE = "noty-sync.json"
 STATE_FILE = "noty-sync-state.json"
@@ -22,15 +22,26 @@ def _uuid():
     return "%s-%s-%s-%s-%s" % (value[:8], value[8:12], value[12:16], value[16:20], value[20:])
 
 
+# Checks run on every record of every sync, so they lean on C-speed builtins: on the board the
+# character-by-character versions took 3.7 ms per identity and 346 ms for a 2,800-character note.
+_HEX_GROUPS = re.compile("^[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+-[0-9a-fA-F]+$")
+
+
 def _identifier(value):
-    return (isinstance(value, str) and len(value) == 36
-            and all(value[i] == "-" for i in (8, 13, 18, 23))
-            and all(c.lower() in "0123456789abcdef" for c in value.replace("-", ""))
-            and len(value.replace("-", "")) == 32)
+    # The fixed dash positions make the five hex runs 8-4-4-4-12; "$" also matches before a final "\n".
+    return (isinstance(value, str) and len(value) == 36 and value[-1] != "\n"
+            and value[8] == value[13] == value[18] == value[23] == "-"
+            and _HEX_GROUPS.match(value) is not None)
 
 
 def _units(value):
-    return sum(2 if ord(c) > 65535 else 1 for c in value)
+    """UTF-16 length, as the service counts it: characters beyond U+FFFF (4 UTF-8 bytes, lead byte
+    F0-F4) count 2."""
+    try:
+        encoded = value.encode()
+    except UnicodeError:                          # a lone surrogate (CPython only): 1 unit
+        return sum(2 if ord(c) > 65535 else 1 for c in value)
+    return len(value) + sum(encoded.count(bytes((lead,))) for lead in b"\xf0\xf1\xf2\xf3\xf4")
 
 
 def _record(value, remote=False):
@@ -70,6 +81,16 @@ def _entry(value):
     if base is not None and base["id"].lower() != task["id"].lower():
         raise ValueError("Mismatched state identity")
     return {"task": task, "base": base}
+
+
+def _copy_entry(entry):
+    """A copy of an entry that's already been checked (checking it again cost ~22 ms each)."""
+    return {"task": dict(entry["task"]), "base": None if entry["base"] is None else dict(entry["base"])}
+
+
+def _digest(response):
+    """Fingerprint of the parts of a reply that matter: the same again means nothing to merge or save."""
+    return hashlib.sha256(json.dumps([response.get("tasks"), response.get("conflicts")]).encode()).digest()
 
 
 def _changes(values):
@@ -133,9 +154,22 @@ class Ledger:
             _board_tasks(saved.get("pending_before"))
 
     def data(self):
+        # Plain copies: everything in a Ledger was checked on the way in, and _save_state checks again.
         return {"schema": 1, "device_note_id": self.device_note_id,
-                "entries": {k: _entry(v) for k, v in self.entries.items()},
-                "sent": None if self.sent is None else _changes(self.sent), "conflicts": self.conflicts}
+                "entries": {k: _copy_entry(v) for k, v in self.entries.items()},
+                "sent": None if self.sent is None else [_copy_entry(v) for v in self.sent], "conflicts": self.conflicts}
+
+    def copy(self):
+        """A working copy to stage changes in (rebuilding one from data() rechecked every record: ~2 s)."""
+        other = Ledger({"schema": 1, "device_note_id": self.device_note_id, "entries": {}, "sent": None,
+                        "conflicts": self.conflicts})
+        other.entries = {k: _copy_entry(v) for k, v in self.entries.items()}
+        other.sent = None if self.sent is None else [_copy_entry(v) for v in self.sent]
+        return other
+
+    def pending(self):
+        """Anything to send: a request kept for a retry, or a task that differs from the server's copy."""
+        return bool(self.sent) or any(e["base"] is None or not _equal(e["task"], e["base"]) for e in self.entries.values())
 
     def reconcile(self, local):
         candidate = _board_tasks(local)
@@ -305,15 +339,15 @@ def _load_state():
 def _save_state(saved):
     Ledger(saved)
     temporary, backup = STATE_FILE + ".tmp", STATE_FILE + ".bak"
-    with open(temporary, "w") as target:
-        json.dump(saved, target)
+    text = io.StringIO()
+    json.dump(saved, text)                        # in memory, then one write: dumped straight to the file it
+    with open(temporary, "w") as target:          # went out in hundreds of small writes
+        target.write(text.getvalue())
         target.flush()
     with open(temporary) as source:
         Ledger(json.load(source))
     if _exists(STATE_FILE):
-        if _exists(backup):
-            os.remove(backup)
-        os.rename(STATE_FILE, backup)
+        os.rename(STATE_FILE, backup)             # replaces the old backup: no separate remove (~0.8 s)
     try:
         os.rename(temporary, STATE_FILE)
     except OSError:
@@ -356,6 +390,7 @@ _changed_at = 0
 _last_attempt = None
 _error = "Sync disabled"
 _last_success = None
+_applied = None       # _digest of the last reply merged in
 
 
 def _commit(ledger, candidate):
@@ -457,6 +492,13 @@ def refresh_now():
     _last_attempt = None
 
 
+def refresh_if_older(ms):
+    """refresh_now() unless a sync started in the last `ms`: the plan screen opens again after every
+    alert, and each sync holds up the main loop ~1-2 s (its HTTPS request blocks it, threaded or not)."""
+    if _last_attempt is None or _diff(_now(), _last_attempt) >= ms:
+        refresh_now()
+
+
 def new_task(text, note_id=None, title="Desk Pal"):
     """Build a locally created task for the explicitly selected board note."""
     target = note_id or device_note_id()
@@ -468,14 +510,15 @@ def new_task(text, note_id=None, title="Desk Pal"):
 def _worker(settings, sent):
     global _result
     try:
-        _result = {"response": _request(settings, sent), "sent": sent}
+        response = _request(settings, sent)
+        _result = {"response": response, "sent": sent, "digest": _digest(response)}
     except Exception:
         # Never expose credentials, full URLs, or task text in network errors.
         _result = {"error": "Task sync unavailable; retrying", "sent": sent}
 
 
 def tick(connect):
-    global _busy, _result, _dirty, _error, _last_attempt, _last_success, _blocked
+    global _busy, _result, _dirty, _error, _last_attempt, _last_success, _blocked, _applied
     if _ledger is None or _settings is None or _blocked:
         return
     now = _now()
@@ -483,13 +526,16 @@ def tick(connect):
         result, _result, _busy = _result, None, False
         if "error" in result:
             _error = result["error"]
+        elif (result.get("digest") is not None and result["digest"] == _applied
+              and not result["sent"] and not _dirty):
+            _error, _last_success = "", now       # the same reply as last time, nothing sent: nothing to do
         else:
             try:
-                staged = Ledger(_ledger.data())
+                staged = _ledger.copy()
                 staged.reconcile(_plan.tasks)
                 candidate = staged.receive(result["response"], result["sent"], MAX_RECORDS)
                 _commit(staged, candidate)
-                _dirty, _error, _last_success = False, "", now
+                _dirty, _error, _last_success, _applied = False, "", now, result.get("digest")
             except ValueError:
                 _error = "Task sync response/capacity needs attention; tasks retained"
             except Exception:
@@ -498,7 +544,7 @@ def tick(connect):
         return
     if _dirty:
         try:
-            staged = Ledger(_ledger.data())
+            staged = _ledger.copy()
             candidate = staged.reconcile(_plan.tasks)
             _commit(staged, candidate)
             _dirty = False
@@ -516,10 +562,13 @@ def tick(connect):
     if not connect():
         return
     try:
-        staged = Ledger(_ledger.data())
-        sent = staged.prepare()
-        _save_state(staged.data())
-        _ledger.sent = staged.sent
+        if _ledger.pending():
+            staged = _ledger.copy()
+            sent = staged.prepare()
+            _save_state(staged.data())
+            _ledger.sent = staged.sent
+        else:
+            sent = []                             # just asking for changes: nothing to keep for a retry
         _thread.stack_size(20 * 1024)
         _busy, _last_attempt = True, now
         _thread.start_new_thread(_worker, (dict(_settings), sent))

@@ -9,9 +9,11 @@ esp32.Partition.mark_app_valid_cancel_rollback()
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # clock sync retry; limits are fetched only on demand (fetch_due)
-# Noty sync off (2026-10-04): each sync froze this loop 9-18 s and one set off the next, so the wake
-# phrase was noticed seconds late. The board keeps showing the Noty data it has; its own edits queue.
-NOTY_SYNC = False
+# Noty sync was off for an evening (2026-10-04): each sync froze this loop 9-18 s, re-checking every task
+# and note character by character, and the wake phrase was noticed seconds late. With C-speed checks,
+# plain copies and nothing done for an unchanged reply, it's back on; False stops it again (the board
+# keeps showing the Noty data it has, and its own edits queue).
+NOTY_SYNC = True
 
 key = Pin(18, Pin.IN, Pin.PULL_UP)
 boot = Pin(0, Pin.IN, Pin.PULL_UP)
@@ -243,9 +245,9 @@ def show(name):
         home_screen = name
     if name == "limits":
         fetch_due = True                 # limits only on demand: fresh numbers each time it's opened
-    if name in ("plan", "note"):
-        noty_sync.refresh_now()          # Noty too: synced when its screens open (each sync freezes ~10 s)
-        noty_notes.refresh_now()
+    if name in ("plan", "note"):         # Noty too: synced when its screens open, at most every 5 min
+        noty_sync.refresh_if_older(5 * 60 * 1000)
+        noty_notes.refresh_if_older(5 * 60 * 1000)
     screen = name
     redraw()
 

@@ -336,7 +336,9 @@ def mean_level(mv):
 def record_followup(max_seconds, wait_ms, stop=None, progress=None, on_start=None, waiting=None):
     """After an answer: wait up to `wait_ms` for you to start talking (no wake phrase needed), then
     record until ~0.8 s of quiet. Returns mono PCM from ~0.5 s before you started, or None if nobody
-    spoke (or `stop()` fired). Reads the listener's ring buffer, so listen() must have started it.
+    spoke, if all it heard was a ~0.2 s blip (a knock or a click: no frames loud beyond the 3 that
+    start a recording; each such blip used to go to the server and back, ~1-2 s, for an empty
+    transcript), or if `stop()` fired. Reads the listener's ring buffer, so listen() must have started it.
     `on_start()` runs when speech starts, then `progress(mv, n)` hears about each frame;
     `waiting(fraction of the wait left)` is called while nothing has been said."""
     if not _wake_ready:                           # the listener isn't running (see wake_error)
@@ -346,7 +348,7 @@ def record_followup(max_seconds, wait_ms, stop=None, progress=None, on_start=Non
     mv = memoryview(buf)
     while wake.read(mv[:32768]):                  # skip what the ring holds from before now
         pass
-    n, start, quiet = 0, None, 0
+    n, start, quiet, spoken = 0, None, 0, 0       # spoken: loud frames in the recording
     levels, loud = [], 15
     t0 = time.ticks_ms()
     try:
@@ -375,18 +377,22 @@ def record_followup(max_seconds, wait_ms, stop=None, progress=None, on_start=Non
                     loud = max(quiet_room * 3 // 2 + 6, 15)
                 if len(levels) > 6 and sum(1 for v in levels[-4:] if v > loud) >= 3:   # ~0.2 s of speech
                     start = max(0, n - 11 * frame)
+                    spoken = sum(1 for v in levels[-11:] if v > loud)
                     sub = mv[start:]
                     if on_start:
                         on_start()
                 continue
-            quiet = 0 if lv > loud else quiet + 1
+            if lv > loud:
+                quiet, spoken = 0, spoken + 1
+            else:
+                quiet += 1
             if progress:
                 progress(sub, n - start)
             if quiet >= 12 or n - start >= RATE * 2 * max_seconds:
                 break
     finally:
         _pause_listener()
-    return None if start is None else mv[start:n]
+    return None if start is None or spoken <= 3 else mv[start:n]
 
 def _background(mv, n, frame, floor):
     """The room's background level: the 10th-percentile frame of the 3 s pre-roll (mv[:n]). The listener's

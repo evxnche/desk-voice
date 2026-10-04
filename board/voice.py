@@ -437,6 +437,8 @@ def ask(key, boot, connect, run, tick, heard=None, followup=False, keep_screen=F
                                         progress=on_audio, on_start=lambda: streams.append(_start_stream(hdrs)),
                                         waiting=face.waiting)
             if pcm is None:
+                if streams and streams[0]:           # it had started uploading: stop that thread
+                    streams[0].quit = True
                 return "back" if back() or not key.value() else "quiet"
         else:
             streams.append(_start_stream(hdrs))

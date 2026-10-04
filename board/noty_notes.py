@@ -1,5 +1,5 @@
 """Full-note cache and Desk Pal projection; networking never changes UI state directly."""
-import json, os, _thread
+import io, json, os, hashlib, _thread
 import noty_sync
 
 STATE_FILE = "noty-notes-state.json"
@@ -44,6 +44,21 @@ def _entry(value):
 
 def _equal(left, right):
     return all(left[field] == right[field] for field in FIELDS)
+
+
+def _copy_note(note):
+    return dict(note, taskIds=note["taskIds"][:])
+
+
+def _copy_entry(entry):
+    """A copy of an entry that's already been checked (checking a long note again took up to 0.9 s)."""
+    return {"note": _copy_note(entry["note"]), "base": None if entry["base"] is None else _copy_note(entry["base"])}
+
+
+def _digest(response):
+    """Fingerprint of the parts of a reply that matter: the same again means nothing to merge or save."""
+    return hashlib.sha256(json.dumps([response.get("notes"), response.get("conflicts"),
+                                      response.get("deskPalId")]).encode()).digest()
 
 
 def _heading(text):
@@ -188,10 +203,25 @@ class Ledger:
             self.conflicts[key] = note
 
     def data(self):
+        # Plain copies: everything in a Ledger was checked on the way in, and _save_state checks again.
         return {"schema": 1, "desk_pal_id": self.desk_pal_id,
-                "entries": {key: _entry(value) for key, value in self.entries.items()},
-                "sent": None if self.sent is None else [_entry(value) for value in self.sent],
-                "conflicts": {key: _document(value, True) for key, value in self.conflicts.items()}}
+                "entries": {key: _copy_entry(value) for key, value in self.entries.items()},
+                "sent": None if self.sent is None else [_copy_entry(value) for value in self.sent],
+                "conflicts": {key: _copy_note(value) for key, value in self.conflicts.items()}}
+
+    def copy(self):
+        """A working copy to stage changes in (rebuilding one from data() rechecked every note: ~3 s)."""
+        other = Ledger()
+        other.desk_pal_id = self.desk_pal_id
+        other.entries = {key: _copy_entry(value) for key, value in self.entries.items()}
+        other.sent = None if self.sent is None else [_copy_entry(value) for value in self.sent]
+        other.conflicts = {key: _copy_note(value) for key, value in self.conflicts.items()}
+        return other
+
+    def pending(self):
+        """Anything to send: a request kept for a retry, or a note edited here (outside a conflict)."""
+        return bool(self.sent) or any(key not in self.conflicts and (entry["base"] is None or not _equal(entry["note"], entry["base"]))
+                                      for key, entry in self.entries.items())
 
     def get(self, note_id):
         entry = self.entries.get(str(note_id or "").lower())
@@ -326,15 +356,15 @@ def _load_state():
 def _save_state(saved):
     Ledger(saved)
     temporary, backup = STATE_FILE + ".tmp", STATE_FILE + ".bak"
-    with open(temporary, "w") as target:
-        json.dump(saved, target)
+    text = io.StringIO()
+    json.dump(saved, text)                        # in memory, then one write: dumped straight to the file it
+    with open(temporary, "w") as target:          # went out in hundreds of small writes
+        target.write(text.getvalue())
         target.flush()
     with open(temporary) as source:
         Ledger(json.load(source))
     if noty_sync._exists(STATE_FILE):
-        if noty_sync._exists(backup):
-            os.remove(backup)
-        os.rename(STATE_FILE, backup)
+        os.rename(STATE_FILE, backup)             # replaces the old backup: no separate remove (~0.8 s)
     try:
         os.rename(temporary, STATE_FILE)
     except OSError:
@@ -353,6 +383,7 @@ _last_attempt = None
 _last_success = None
 _force = False
 _version = 0
+_applied = None       # _digest of the last reply merged in
 viewing_id = None
 page = 0
 _shown = None
@@ -414,7 +445,7 @@ def edit_project(name, stage):
     global _ledger, _force, _version
     if _ledger is None or _blocked:
         return False
-    staged = Ledger(_ledger.data())
+    staged = _ledger.copy()
     if not staged.set_project(name, stage):
         return False
     try:
@@ -429,6 +460,12 @@ def edit_project(name, stage):
 def refresh_now():
     global _force
     _force = True
+
+
+def refresh_if_older(ms):
+    """refresh_now() unless a sync started in the last `ms` (see noty_sync.refresh_if_older)."""
+    if _last_attempt is None or noty_sync._diff(noty_sync._now(), _last_attempt) >= ms:
+        refresh_now()
 
 
 def info():
@@ -454,13 +491,14 @@ def info():
 def _worker(settings, sent):
     global _result
     try:
-        _result = {"response": noty_sync._request(settings, sent), "sent": sent}
+        response = noty_sync._request(settings, sent)
+        _result = {"response": response, "sent": sent, "digest": _digest(response)}
     except Exception:
         _result = {"error": "Note sync unavailable; retrying", "sent": sent}
 
 
 def tick(connect):
-    global _ledger, _busy, _result, _error, _last_attempt, _last_success, _force, _version
+    global _ledger, _busy, _result, _error, _last_attempt, _last_success, _force, _version, _applied
     if _ledger is None or _settings is None or _blocked:
         return
     now = noty_sync._now()
@@ -468,12 +506,14 @@ def tick(connect):
         result, _result, _busy = _result, None, False
         if "error" in result:
             _error = result["error"]
+        elif result.get("digest") is not None and result["digest"] == _applied and not result["sent"]:
+            _last_success, _error = now, ""       # the same reply as last time, nothing sent: nothing to do
         else:
             try:
-                staged = Ledger(_ledger.data())
+                staged = _ledger.copy()
                 staged.receive(result["response"], result["sent"])
                 _save_state(staged.data())
-                _ledger, _last_success, _error = staged, now, ""
+                _ledger, _last_success, _error, _applied = staged, now, "", result.get("digest")
                 _version += 1
                 import plan
                 cached_ids = set(task.get("id", "").lower() for task in plan.tasks)
@@ -490,10 +530,13 @@ def tick(connect):
     if not connect():
         return
     try:
-        staged = Ledger(_ledger.data())
-        sent = staged.prepare()
-        _save_state(staged.data())
-        _ledger.sent = staged.sent
+        if _ledger.pending():
+            staged = _ledger.copy()
+            sent = staged.prepare()
+            _save_state(staged.data())
+            _ledger.sent = staged.sent
+        else:
+            sent = []                             # just asking for changes: nothing to keep for a retry
         # The board's MicroPython build requires a 20 KB worker stack.
         _thread.stack_size(20 * 1024)
         _busy, _last_attempt, _force = True, now, False
