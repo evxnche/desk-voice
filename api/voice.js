@@ -416,11 +416,12 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
     }),
     mac_control: tool({
       description: "Do something on the owner's Mac: lock it, put it to sleep, hide every window (hide_all), " +
-        'open an app or site by name (e.g. ezwrite, Safari, Spotify), close (quit) an app, set its volume (level 0-100), mute or unmute it.',
+        'open an app or site by name (e.g. ezwrite, Safari, Spotify), close (quit) an app, close a browser tab (close_tab: ' +
+        'the one you last opened or the one in front; target = which, e.g. YouTube), set its volume (level 0-100), mute or unmute it.',
       inputSchema: jsonSchema({
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['lock', 'sleep', 'hide_all', 'open', 'close', 'volume', 'mute', 'unmute'] },
+          action: { type: 'string', enum: ['lock', 'sleep', 'hide_all', 'open', 'close', 'close_tab', 'volume', 'mute', 'unmute'] },
           target: { type: 'string', description: 'The app to open or close, or for a website its domain (youtube.com, x.com)' },
           level: { type: 'integer', minimum: 0, maximum: 100, description: 'Volume percent' },
         },
@@ -432,7 +433,7 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         const clean = String(target || '').trim().slice(0, 40);
         if ((action === 'open' || action === 'close') && !clean) return { ok: false, error: `Nothing to ${action}: ask the owner what` };
         if (action === 'volume' && !Number.isInteger(level)) return { ok: false, error: 'Give a volume from 0 to 100' };
-        cmds.push({ do: 'mac', action, ...((action === 'open' || action === 'close') && { target: clean }),
+        cmds.push({ do: 'mac', action, ...((action === 'open' || action === 'close' || (action === 'close_tab' && clean)) && { target: clean }),
           ...(action === 'volume' && { target: String(Math.min(100, Math.max(0, level))) }) });
         return { ok: true, sent_to_mac: true };
       },
@@ -610,7 +611,7 @@ function needsSearch(question) {
 }
 
 // Timer, music and screen requests: same forced-tool treatment as radar requests.
-const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the )?\w+|(search|look up)\b.*\b(on|in) (youtube|google|perplexity|x|twitter|reddit|amazon|github|wikipedia|maps|my mac|the browser)\b|(copy|clipboard)|(on|at) my screen|this (error|page|code|message)|(sleep|mute|unmute) (my |the )?(mac|computer|laptop)|hide (everything|all)|mac volume|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
+const GADGETY = /\b(lock (my |the )?(mac|computer|laptop|screen)|(open|close|quit) (up )?(my |the |that |this )?\w+|(search|look up)\b.*\b(on|in) (youtube|google|perplexity|x|twitter|reddit|amazon|github|wikipedia|maps|my mac|the browser)\b|(copy|clipboard)|(on|at) my screen|this (error|page|code|message)|(sleep|mute|unmute) (my |the )?(mac|computer|laptop)|hide (everything|all)|mac volume|menu|expand|enlarge|full ?screen|timer|focus|pomodoro|countdown|play|pause|resume|skip|next song|previous song|music|spotify|song|playlist|show (me )?(the )?\w+ screen|switch to|go to|volume|louder|quieter|softer|mute)\b/i;
 // Changing tasks or projects ("add call the bank to my tasks", "move ezwrite to testing"); questions
 // about them are answered from the device context without a tool.
 // "Remind me to reset my limits in half an hour", "set a reminder for 3pm": set_reminder, never a timer.
@@ -1065,7 +1066,8 @@ export async function POST(request) {
         (deviceContext.mac
           ? "The owner's Mac is connected: use mac_control to lock it, sleep it, hide its windows, open or close an app or site, " +
             'or change its volume, then confirm in a few words. To look something up on a site ("open YouTube and search for X", ' +
-            '"look up X on Google"), use mac_search once; it opens the results, no separate open needed. Use mac_copy when asked to copy something or put it on the clipboard. ' +
+            '"look up X on Google"), use mac_search once; it opens the results, no separate open needed. ' +
+            'To close a tab ("close that tab", "close the YouTube tab"), use mac_control close_tab, never close (that quits an app). Use mac_copy when asked to copy something or put it on the clipboard. ' +
             "Use look_at_screen for any question about what is on their screen (\"what's this error?\"), then just say you're taking a look. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
             'minutes in that state; what the owner last asked): answer "what is Claude doing?" from that, briefly, without changing the screen. '

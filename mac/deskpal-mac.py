@@ -138,6 +138,60 @@ def look(question):
     say_on_board("screen", text)
 
 
+# Pages open as real tabs in Arc's main window (macOS's "open" puts them in a Little Arc pop-up, which
+# scripts can't see), so "close that tab" can close exactly the tab this helper opened.
+_opened_tab = [None]                                 # Arc id of the last tab this helper opened
+
+
+def arc(script):
+    return subprocess.run(["osascript", "-e", 'tell application "Arc"\n%s\nend tell' % script],
+                          capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+
+
+def arc_tabs():
+    """{id: (url, title)} for the tabs in Arc's front window."""
+    out = arc('set out to ""\nrepeat with t in tabs of front window\nset out to out & (id of t as text) & '
+              '(character id 9) & (URL of t) & (character id 9) & (title of t) & linefeed\nend repeat\nreturn out')
+    return {r[0]: (r[1], r[2]) for r in ((line.split("\t") + ["", ""])[:3] for line in out.splitlines() if line)}
+
+
+def open_page(url):
+    """A new tab in Arc's front window, remembered for "close that tab"; any other browser via open."""
+    try:
+        before = set(arc_tabs())
+        arc('tell front window to make new tab with properties {URL:"%s"}\nactivate' % url.replace('"', "%22"))
+        new = set(arc_tabs()) - before
+        _opened_tab[0] = new.pop() if len(new) == 1 else None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):   # no Arc window, or no permission yet
+        _opened_tab[0] = None
+        subprocess.run(["open", url], check=True, capture_output=True)
+
+
+def fits(target, url, title):
+    """Does "close the YouTube tab" mean a tab showing this? (No target: any tab.)"""
+    squash = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    if not target:
+        return True
+    site = urllib.parse.urlparse(SITES.get(squash(target), "")).hostname or ""
+    return squash(target) in squash(url + title) or bool(site and site.replace("www.", "") in url)
+
+
+def close_tab(target):
+    """Close the tab this helper opened, else the tab you're on, and only if it's the one asked for;
+    never any other tab."""
+    opened = arc_tabs().get(_opened_tab[0]) if _opened_tab[0] else None
+    if opened and fits(target, *opened):
+        arc('close (first tab of front window whose id is "%s")' % _opened_tab[0])
+        print("  closed the tab it opened:", opened[0], flush=True)
+        _opened_tab[0] = None
+        return
+    url, title = arc("get URL of active tab of front window"), arc("get title of active tab of front window")
+    if not fits(target, url, title):
+        raise ValueError("neither the tab it opened nor the one in front is that")
+    arc("close active tab of front window")
+    print("  closed the tab in front:", url, flush=True)
+
+
 def type_text(text):
     """Type into whatever is in front by pasting, then put the clipboard back as it was."""
     before = subprocess.run(["pbpaste"], capture_output=True, env=UTF8).stdout
@@ -168,7 +222,9 @@ def run(action, target):
     elif action == "url":                 # search results ("open YouTube and look up Perplexity")
         if not re.fullmatch(r"https://[^\s\"']{1,500}", target):
             raise ValueError("not a web address")
-        subprocess.run(["open", target], check=True, capture_output=True)
+        open_page(target)
+    elif action == "close_tab":
+        close_tab(target.strip())
     elif action == "screen":
         threading.Thread(target=look, args=(target or "What's on my screen?",), daemon=True).start()
     elif action in ("open", "close"):
@@ -178,9 +234,12 @@ def run(action, target):
         kind, what = find(name)
         print("  ->", what, flush=True)
         if action == "open":
-            subprocess.run(["open", what] if kind == "site" else ["open", "-a", what], check=True, capture_output=True)
+            if kind == "site":
+                open_page(what)
+            else:
+                subprocess.run(["open", "-a", what], check=True, capture_output=True)
         elif kind == "site":
-            raise ValueError("can't close a site")
+            close_tab(name)                   # "close YouTube" means its tab
         else:
             # Quit like Cmd-Q, so an app with unsaved work asks first.
             subprocess.run(["osascript", "-e", 'quit app "%s"' % what], check=True, capture_output=True)
@@ -292,7 +351,8 @@ class Handler(BaseHTTPRequestHandler):
             print("failed:", cmd, e, flush=True)
             self.reply(400, {"ok": False})
             # The board already said it was done: put that right.
-            what = {"open": "open %s", "close": "close %s", "url": "open that"}.get(cmd.get("action"), "do that")
+            what = {"open": "open %s", "close": "close %s", "url": "open that",
+                    "close_tab": "tell which tab to close"}.get(cmd.get("action"), "do that")
             try:
                 say_on_board("screen", "Sorry, I couldn't %s on your Mac." % (what % cmd.get("target", "") if "%s" in what else what))
             except Exception:
