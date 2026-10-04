@@ -539,17 +539,23 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
       },
     }),
     mac_play_video: tool({
-      description: "Play a YouTube video on the owner's Mac: opens the top YouTube result for the query, which starts playing. " +
-        'Use it when they ask to play, watch or put on a video, including "play the first video" after a YouTube search ' +
-        '(use that search as the query).',
-      inputSchema: jsonSchema({ type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false }),
-      execute: async ({ query }) => {
+      description: "Play a YouTube video on the owner's Mac: opens a YouTube result for the query (the top one, or the " +
+        'rank-th), which starts playing. Use it when they ask to play, watch or put on a video. After a YouTube search, ' +
+        '"play the first/second/third video" means that search as the query and that position as rank.',
+      inputSchema: jsonSchema({
+        type: 'object',
+        properties: { query: { type: 'string' },
+                      rank: { type: 'integer', minimum: 1, maximum: 10, description: 'Which result: 1 = top (the default), 2 = second...' } },
+        required: ['query'],
+        additionalProperties: false,
+      }),
+      execute: async ({ query, rank }) => {
         if (!deviceContext.mac) return { ok: false, error: MAC_OFFLINE };
         const q = String(query || '').trim().slice(0, 200);
         if (!q) return { ok: false, error: 'No video named: ask the owner which one' };
         try {
-          const video = await firstYouTubeVideo(q);
-          if (!video) return { ok: false, error: `No YouTube video found for ${q}` };
+          const video = await youTubeVideo(q, Number.isInteger(rank) ? Math.min(10, Math.max(1, rank)) : 1);
+          if (!video) return { ok: false, error: `No YouTube video found for ${q}${rank > 1 ? ` at position ${rank}` : ''}` };
           cmds.push({ do: 'mac', action: 'url', target: `https://www.youtube.com/watch?v=${video.id}` });
           return { ok: true, playing: video.title };
         } catch (e) {
@@ -763,18 +769,21 @@ const SEARCH_URLS = {
 };
 const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't running)";
 
-// The top video for a YouTube search, read from the results page (no API key). The consent cookie
-// skips the EU cookie page; the browser UA gets the full page with the results in it.
-export async function firstYouTubeVideo(query) {
+// The rank-th video (1 = top) for a YouTube search, read from the results page (no API key). The
+// consent cookie skips the EU cookie page; the browser UA gets the full page with the results in it.
+export async function youTubeVideo(query, rank = 1) {
   const r = await fetch(SEARCH_URLS.youtube + encodeURIComponent(query), {
     headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
                'Accept-Language': 'en-GB,en;q=0.9', Cookie: 'SOCS=CAI; CONSENT=YES+' },
     signal: AbortSignal.timeout(6000),
   });
   if (!r.ok) throw new Error(`YouTube search failed (${r.status})`);
-  const m = /"videoRenderer":\{"videoId":"([\w-]{11})".*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/s.exec(await r.text());
-  if (!m) return null;
-  return { id: m[1], title: JSON.parse(`"${m[2]}"`) };
+  const results = /"videoRenderer":\{"videoId":"([\w-]{11})".*?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/gs;
+  const html = await r.text();
+  for (let m, n = 1; (m = results.exec(html)); n++) {
+    if (n === rank) return { id: m[1], title: JSON.parse(`"${m[2]}"`) };
+  }
+  return null;
 }
 
 // Dictation: "dictation mode" makes KEY recordings type on the Mac (X-Dictate from the board) until
@@ -997,8 +1006,32 @@ async function practiceAnswer(history, heard, starting) {
 const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|ok(ay)?|cool|great|bye|you|mm+|hmm+|uh+|um+)\W*$/i;
 
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
+const STT_BACKUP = 'openai/gpt-4o-mini-transcribe';
+const STT_TIMEOUT_MS = 5000;
 const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a desk gadget, often starting ' +
   'with its wake word "GG" (said "gee gee").';
+
+// The question as text, or '' for silence or mumbling (the SDK throws NoTranscriptGeneratedError).
+// One grok-stt call took 31 s on 2026-10-04 (the SDK retries twice, with waits, by default), holding up
+// the whole answer: each try now gets 5 s and no retries, then the other transcriber gets one try.
+// (OpenAI options, for STT_MODEL=openai/... and the backup) English only: left to guess,
+// gpt-4o-mini-transcribe heard "show me aircraft over Bournemouth" as Czech, and with only the language
+// hint once wrote Urdu script. grok-stt reads only the xai options: left to guess, a bare "gee gee"
+// came back as Hindi "जी जी।" (2026-10-04, live and with `say`). Spanish practice keeps guessing so
+// Spanish is written as Spanish.
+async function transcribeQuestion(wav, practicing) {
+  const providerOptions = practicing ? {} : { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT }, xai: { language: 'en' } };
+  for (const model of [STT_MODEL, STT_BACKUP]) {
+    try {
+      return await transcribe({ model: gateway.transcriptionModel(model), audio: wav, providerOptions,
+                                maxRetries: 0, abortSignal: AbortSignal.timeout(STT_TIMEOUT_MS) });
+    } catch (e) {
+      if (e?.name === 'AI_NoTranscriptGeneratedError') return { text: '' };   // nothing said: no second try
+      console.log('stt failed:', model, e?.name || '', String(e?.message || e).slice(0, 120));
+    }
+  }
+  return { text: '' };
+}
 
 // The board calls this the moment you start talking, so a function that had gone cold (~0.6-0.9 s to
 // start) is warm by the time the question arrives.
@@ -1035,15 +1068,7 @@ export async function POST(request) {
   const homeWeather = getWeather(ipHome.lat, ipHome.lon).catch(() => null);
 
   const [{ text: transcript }, limits] = await Promise.all([
-    // Silence or mumbling makes the SDK throw NoTranscriptGeneratedError; treat it as "didn't catch that".
-    // (OpenAI options, for STT_MODEL=openai/...) English only: left to guess, gpt-4o-mini-transcribe heard
-    // "show me aircraft over Bournemouth" as Czech, and with only the language hint once wrote Urdu script.
-    // grok-stt reads only the xai options: left to guess, a bare "gee gee" came back as Hindi "जी जी।"
-    // (2026-10-04, live and with `say`). Spanish practice keeps guessing so Spanish is written as Spanish.
-    transcribe({ model: gateway.transcriptionModel(STT_MODEL), audio: toWav(pcm, RATE),
-                 providerOptions: { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT },
-                                    ...(request.headers.get('x-practice') !== 'es' && { xai: { language: 'en' } }) } })
-      .catch(() => ({ text: '' })),
+    transcribeQuestion(toWav(pcm, RATE), request.headers.get('x-practice') === 'es'),
     limitsSummary(),
   ]);
   ms.transcribe = Date.now() - t0 - ms.upload;
@@ -1066,7 +1091,9 @@ export async function POST(request) {
   }
   if (wake) {
     const words = WAKE_SPELLINGS[wake] || wake.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const at = new RegExp(`\\b(?:${words})(s|'s)?\\b[\\s,.!?:;-]*`, 'i').exec(heard);
+    // The phrase, and any repeats of it ("Gigi. Gigi. Set a reminder..." made a reminder called "Gigi").
+    const once = `(?:${words})(?:s|'s)?\\b[\\s,.!?:;-]*`;
+    const at = new RegExp(`\\b${once}(?:${once})*`, 'i').exec(heard);
     console.log('wake:', wake, '| transcript:', transcript, '| match:', Boolean(at));
     if (!at) return ignored(heard);
     heard = heard.slice(at.index + at[0].length);
@@ -1187,7 +1214,8 @@ export async function POST(request) {
           ? "The owner's Mac is connected: use mac_control to lock it, sleep it, hide its windows, open or close an app or site, " +
             'or change its volume, then confirm in a few words. To look something up on a site ("open YouTube and search for X", ' +
             '"look up X on Google"), use mac_search once; it opens the results, no separate open needed. ' +
-            'To play or watch a video ("play the deep dive video", "play the first one"), use mac_play_video, never Spotify. ' +
+            'To play or watch a video ("play the deep dive video", "play the second one"), use mac_play_video (with rank for ' +
+            'a position), never Spotify. ' +
             'To close a tab ("close that tab", "close the YouTube tab"), use mac_control close_tab, never close (that quits an app). Use mac_copy when asked to copy something or put it on the clipboard. ' +
             "Use look_at_screen for any question about what is on their screen (\"what's this error?\"), then just say you're taking a look. " +
             'The device context lists its recent Claude Code sessions (project, state: working, waiting for the owner, or done; ' +
