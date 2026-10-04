@@ -9,6 +9,9 @@ esp32.Partition.mark_app_valid_cancel_rollback()
 
 URL = "https://agent-limits.vercel.app/api/limits?k=" + secrets.READ_KEY
 REFRESH_MS = 5 * 60 * 1000   # clock sync retry; limits are fetched only on demand (fetch_due)
+# Noty sync off (2026-10-04): each sync froze this loop 9-18 s and one set off the next, so the wake
+# phrase was noticed seconds late. The board keeps showing the Noty data it has; its own edits queue.
+NOTY_SYNC = False
 
 key = Pin(18, Pin.IN, Pin.PULL_UP)
 boot = Pin(0, Pin.IN, Pin.PULL_UP)
@@ -734,8 +737,9 @@ while True:
         show(SCREENS[0])
     lt = room.local_time()
     schedule.tick(connect, lt)
-    noty_sync.tick(lambda: wlan.isconnected())
-    noty_notes.tick(lambda: wlan.isconnected())
+    if NOTY_SYNC:
+        noty_sync.tick(lambda: wlan.isconnected())
+        noty_notes.tick(lambda: wlan.isconnected())
     if lt and lt[4] != checked_minute:
         checked_minute = lt[4]
         companion.check_time(lt, timer.active, pal.ambient.hearing)
