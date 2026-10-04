@@ -6,7 +6,9 @@ STATE_FILE = "noty-sync-state.json"
 CA_FILE = "noty-sync-ca.der"
 MAX_BYTES = 128 * 1024
 MAX_RECORDS = 512
-POLL_MS = 30000
+POLL_MS = 15 * 60 * 1000   # safety net only: a sync (~10 s of a frozen main loop) runs when the plan
+                           # screen opens, the Mac says Noty changed (mac.noty), or a board edit is due
+RETRY_MS = 30000            # after a failed sync (Wi-Fi blip): try again soon, not in 15 minutes
 DEBOUNCE_MS = 2000
 FIELDS = ("noteId", "listTitle", "text", "completed", "position", "deleted")
 KEYS = ("id",) + FIELDS + ("version",)
@@ -507,7 +509,7 @@ def tick(connect):
             return
     local_due = (_last_attempt is not None and _diff(_changed_at, _last_attempt) > 0
                  and _diff(now, _changed_at) >= DEBOUNCE_MS)
-    if _busy or _last_attempt is not None and _diff(now, _last_attempt) < POLL_MS and not local_due:
+    if _busy or _last_attempt is not None and _diff(now, _last_attempt) < (RETRY_MS if _error else POLL_MS) and not local_due:
         return
     if _last_attempt is not None and _diff(now, _last_attempt) < DEBOUNCE_MS:
         return

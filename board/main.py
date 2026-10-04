@@ -240,6 +240,9 @@ def show(name):
         home_screen = name
     if name == "limits":
         fetch_due = True                 # limits only on demand: fresh numbers each time it's opened
+    if name in ("plan", "note"):
+        noty_sync.refresh_now()          # Noty too: synced when its screens open (each sync freezes ~10 s)
+        noty_notes.refresh_now()
     screen = name
     redraw()
 
@@ -446,7 +449,11 @@ def handle(method, path, q, body):
                 companion.needs_you(a.get("agent"), a.get("project"))   # the Pal says it after the chime
         return 200, "application/json", '{"ok":true}'
     if path == "/mac":                       # the Mac helper checking in
-        return 200, "application/json", json.dumps({"ok": mac.check_in(json.loads(body or b"{}"))})
+        info = json.loads(body or b"{}")
+        if info.get("noty") and info.get("noty") != mac.noty:   # Noty changed on the Mac: sync once
+            noty_sync.refresh_now()
+            noty_notes.refresh_now()
+        return 200, "application/json", json.dumps({"ok": mac.check_in(info)})
     if path == "/mac/say":                   # the Mac has something to say: a screen answer, the procrastination cop
         a = json.loads(body or b"{}")
         kind, text = a.get("kind"), str(a.get("text") or "")[:400]

@@ -15,7 +15,7 @@ and control of System Events and the browsers (hiding windows, reading the site 
 
 Lives next to notify.py in ~/.claude/deskpal and shares its key and board-ip files.
 """
-import datetime, difflib, glob, json, os, random, re, socket, subprocess, tempfile, threading, time, urllib.parse, urllib.request
+import datetime, difflib, glob, json, os, random, re, socket, sqlite3, subprocess, tempfile, threading, time, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -27,6 +27,7 @@ KEY = open(os.path.join(HERE, "key")).read().strip()
 IP_CACHE = os.path.join(HERE, "board-ip")
 TURNS = os.path.join(HERE, "turns")
 LOOK_URL = "https://desk-voice.vercel.app/api/look"
+NOTY_DB = os.path.expanduser("~/Library/Application Support/Noty/notes.db")
 UTF8 = dict(os.environ, LANG="en_US.UTF-8")   # launchd sets no locale, and pbcopy then mangles accents
 
 # Things to open that aren't apps in /Applications, by name without spaces (as transcribed: "easy write").
@@ -84,11 +85,25 @@ def claude_sessions():
     return [s for _, s in sorted(out, key=lambda x: -x[0])[:5]]
 
 
-def check_in(sessions):
+def noty_stamp():
+    """Changes whenever a Noty note (and so a task in one) is added, edited or removed, on this Mac or
+    synced in from the phone; the board syncs Noty only when it changes. "" without Noty."""
+    try:
+        db = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(NOTY_DB), uri=True, timeout=1)
+        try:
+            n, total = db.execute("select count(*), total(modified) from notes").fetchone()
+        finally:
+            db.close()
+        return "%d:%.3f" % (n, total)
+    except Exception:
+        return ""
+
+
+def check_in(sessions, noty):
     for fresh in (False, True):
         try:
             board = board_ip(fresh)
-            body = json.dumps({"url": "http://%s:%d" % (my_ip(board), PORT), "claude": sessions}).encode()
+            body = json.dumps({"url": "http://%s:%d" % (my_ip(board), PORT), "claude": sessions, "noty": noty}).encode()
             req = urllib.request.Request("http://%s/mac?k=%s" % (board, KEY), data=body, method="POST")
             urllib.request.urlopen(req, timeout=3).read()
             return
@@ -385,10 +400,10 @@ def main():
     threading.Thread(target=server.serve_forever, daemon=True).start()
     sent, last, cop = None, 0, Cop()
     while True:
-        sessions = claude_sessions()
-        if sessions != sent or time.time() - last >= CHECK_IN_S:
-            check_in(sessions)                # board unreachable: tried again on the next change or minute
-            sent, last = sessions, time.time()
+        now = (claude_sessions(), noty_stamp())
+        if now != sent or time.time() - last >= CHECK_IN_S:
+            check_in(*now)                    # board unreachable: tried again on the next change or minute
+            sent, last = now, time.time()
         try:
             cop.tick()
         except Exception as e:

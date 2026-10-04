@@ -11,13 +11,15 @@ url = ""                       # "http://192.168.1.20:8737"
 _dictate_until = None
 claude = []                    # [{"project", "state": "working"|"waiting"|"done", "mins", "prompt"}]
 _seen = None
+noty = ""                      # the Mac's Noty change stamp ("" until it sends one)
 
 def check_in(info):
-    global url, claude, _seen
+    global url, claude, _seen, noty
     u = str(info.get("url") or "")
     if not u.startswith("http://"):
         return False
     url, _seen = u, time.ticks_ms()
+    noty = str(info.get("noty") or "")
     claude = [s for s in info.get("claude") or [] if isinstance(s, dict)][:5]
     return True
 

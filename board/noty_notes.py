@@ -5,7 +5,8 @@ import noty_sync
 STATE_FILE = "noty-notes-state.json"
 STAGES = ("idea", "building", "testing", "shipped")
 FIELDS = ("title", "body", "archived", "deleted")
-POLL_MS = 15000
+POLL_MS = 15 * 60 * 1000   # safety net only, as noty_sync.POLL_MS
+RETRY_MS = 15000           # after a failed sync: try again soon
 MAX_NOTES = 128
 
 
@@ -484,7 +485,7 @@ def tick(connect):
         return
     if _last_attempt is not None:
         elapsed = noty_sync._diff(now, _last_attempt)
-        if elapsed < noty_sync.DEBOUNCE_MS or not _force and elapsed < POLL_MS:
+        if elapsed < noty_sync.DEBOUNCE_MS or not _force and elapsed < (RETRY_MS if _error else POLL_MS):
             return
     if not connect():
         return
