@@ -555,7 +555,9 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         const q = String(query || '').trim().slice(0, 200);
         if (!q) return { ok: false, error: 'No video named: ask the owner which one' };
         try {
-          const position = Number.isInteger(rank) ? Math.min(10, Math.max(1, rank)) : null;
+          // Only a position they said: the model also sent rank 1 for "play the deep dive video", which
+          // would play the top video of whatever results page is open instead of the one named.
+          const position = Number.isInteger(rank) && SPOKEN_POSITION.test(heard) ? Math.min(10, Math.max(1, rank)) : null;
           const video = await youTubeVideo(q, position || 1, deviceContext.country);
           if (!video) return { ok: false, error: `No YouTube video found for ${q}${position > 1 ? ` at position ${position}` : ''}` };
           // A position is taken from the results page open on the Mac (YouTube's order differs per
@@ -773,6 +775,7 @@ const SEARCH_URLS = {
   maps: 'https://www.google.com/maps/search/',
 };
 const MAC_OFFLINE = "The Mac isn't connected (asleep, off, or its helper isn't running)";
+const SPOKEN_POSITION = /\b(first|second|third|fourth|fifth|top|\d+(st|nd|rd|th)|number (\d+|one|two|three|four|five))\b/i;
 
 // The rank-th video (1 = top) for a YouTube search, read from the results page (no API key). The
 // consent cookie skips the EU cookie page; the browser UA gets the full page with the results in it.
