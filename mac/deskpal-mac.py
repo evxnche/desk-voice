@@ -144,25 +144,35 @@ _opened_tab = [None]                                 # Arc id of the last tab th
 
 
 def arc(script):
-    return subprocess.run(["osascript", "-e", 'tell application "Arc"\n%s\nend tell' % script],
-                          capture_output=True, text=True, check=True, timeout=10).stdout.strip()
+    r = subprocess.run(["osascript", "-e", 'tell application "Arc"\n%s\nend tell' % script],
+                       capture_output=True, text=True, timeout=10)
+    if r.returncode:
+        raise OSError("Arc: " + r.stderr.strip())     # e.g. not allowed to control Arc yet
+    return r.stdout.strip()
 
 
-def arc_tabs():
-    """{id: (url, title)} for the tabs in Arc's front window."""
-    out = arc('set out to ""\nrepeat with t in tabs of front window\nset out to out & (id of t as text) & '
-              '(character id 9) & (URL of t) & (character id 9) & (title of t) & linefeed\nend repeat\nreturn out')
-    return {r[0]: (r[1], r[2]) for r in ((line.split("\t") + ["", ""])[:3] for line in out.splitlines() if line)}
+def arc_ids():
+    """Ids of the tabs in Arc's front window, in one request (tab by tab takes 10+ s with 1,400 tabs)."""
+    return set(arc("get id of every tab of front window").split(", "))
+
+
+def arc_tab(tab_id):
+    """(url, title) of that tab, or None once it's closed."""
+    try:      # asked directly: Arc can't read a tab kept in a variable
+        return arc('get URL of tab id "%s" of front window' % tab_id), arc('get title of tab id "%s" of front window' % tab_id)
+    except OSError:
+        return None
 
 
 def open_page(url):
     """A new tab in Arc's front window, remembered for "close that tab"; any other browser via open."""
     try:
-        before = set(arc_tabs())
+        before = arc_ids()
         arc('tell front window to make new tab with properties {URL:"%s"}\nactivate' % url.replace('"', "%22"))
-        new = set(arc_tabs()) - before
+        new = arc_ids() - before
         _opened_tab[0] = new.pop() if len(new) == 1 else None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):   # no Arc window, or no permission yet
+    except (subprocess.TimeoutExpired, OSError) as e:   # no Arc window, or no permission yet
+        print("  ", e, flush=True)
         _opened_tab[0] = None
         subprocess.run(["open", url], check=True, capture_output=True)
 
@@ -179,9 +189,9 @@ def fits(target, url, title):
 def close_tab(target):
     """Close the tab this helper opened, else the tab you're on, and only if it's the one asked for;
     never any other tab."""
-    opened = arc_tabs().get(_opened_tab[0]) if _opened_tab[0] else None
+    opened = arc_tab(_opened_tab[0]) if _opened_tab[0] else None
     if opened and fits(target, *opened):
-        arc('close (first tab of front window whose id is "%s")' % _opened_tab[0])
+        arc('close tab id "%s" of front window' % _opened_tab[0])
         print("  closed the tab it opened:", opened[0], flush=True)
         _opened_tab[0] = None
         return
