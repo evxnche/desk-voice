@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { sentences } from '../api/look.js';
-import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, dictation, firstToolFor,
+import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, dictation, firstToolFor, minutesUntil, TIMED_REMINDER,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
 const header = (value) => Buffer.from(JSON.stringify(value)).toString('base64');
@@ -267,4 +267,33 @@ test('screen answers end on a whole sentence within the board\'s 400 characters'
   assert.equal(sentences('Short one.', 400), 'Short one.');
   assert.equal(sentences('First bit here. Second bit that runs on and on', 30), 'First bit here.');
   assert.equal(sentences('no sentence ends anywhere in this', 20), 'no sentence ends.');
+});
+
+test('timed reminders are told apart from tasks, and never leave a timer behind', async () => {
+  for (const said of ['Remind me to reset codex limits in half an hour', 'remind me in 20 minutes to take a break',
+    'set a reminder for 3 p.m. to call mum', 'remind me tomorrow at 9 to pay rent', 'Remind me at 5 to stretch']) {
+    assert.ok(TIMED_REMINDER.test(said), said);
+  }
+  for (const said of ['remind me to call the bank', 'remind me to check in with Sam', 'start a 30 minute focus timer']) {
+    assert.ok(!TIMED_REMINDER.test(said), said);
+  }
+  const cmds = [{ do: 'timer', minutes: 20, label: 'reset codex limits' }, { do: 'reminder', text: 'take a break', minutes: 20 }];
+  applyBoardBackstops('remind me to take a break in 20 minutes', null, cmds, { radius: 20 }, {}, ['set_reminder']);
+  assert.deepEqual(cmds, [{ do: 'reminder', text: 'take a break', minutes: 20 }]);
+  const commands = [];
+  const tools = boardTools(commands, '', { memories: [], alert: null, reminders: [{ text: 'pay rent', in_minutes: 50 }] });
+  assert.equal((await tools.set_reminder.execute({ text: 'reset your Codex limits', minutes: 30 })).ok, true);
+  assert.equal((await tools.set_reminder.execute({ text: 'something' })).ok, false);
+  assert.equal((await tools.cancel_reminder.execute({ text: 'rent' })).ok, true);
+  assert.deepEqual(commands, [{ do: 'reminder', text: 'reset your Codex limits', minutes: 30 },
+    { do: 'reminder_cancel', text: 'pay rent' }]);
+});
+
+test('reminder clock times count from UK time, rolling over to tomorrow', () => {
+  const at = new Date('2026-10-04T13:00:00Z');                // 2pm in London (BST)
+  assert.equal(minutesUntil('15:00', false, at), 60);
+  assert.equal(minutesUntil('13:30', false, at), 23.5 * 60);
+  assert.equal(minutesUntil('15:00', true, at), 25 * 60);
+  assert.equal(minutesUntil('09:00', true, at), 19 * 60);
+  assert.ok(Number.isNaN(minutesUntil('25:00', false, at)));
 });

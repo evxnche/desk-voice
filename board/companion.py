@@ -36,7 +36,7 @@ def _add(kind, text, first=False, key=None, urgent=False, interrupt_focus=False,
     key = key or kind
     if kind == "needs" and any(q["key"] == key for q in queue):
         return False
-    if kind != "needs":
+    if kind not in ("needs", "reminder"):       # several of these can wait at once
         queue[:] = [q for q in queue if q["kind"] != kind]
     item = {"kind": kind, "text": text, "at": now, "key": key, "urgent": urgent,
             "interrupt_focus": interrupt_focus, "ttl_ms": ttl_ms}
@@ -59,6 +59,10 @@ def needs_you(agent, project):
 def resolve_needs(agent, project):
     key = ("needs", agent or "Your agent", project or "")
     queue[:] = [item for item in queue if item["key"] != key]
+
+def reminder(text):
+    """A reminder you set by voice is due (reminders.py): said straight away, quiet hours and focus or not."""
+    _add("reminder", "Reminder: %s." % text.rstrip("."), first=True, key=("reminder", text), urgent=True)
 
 def from_mac(kind, text):
     """The Mac helper's lines: "screen" (the answer to "what's this error?") goes first and always gets

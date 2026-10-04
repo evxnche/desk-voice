@@ -1,7 +1,7 @@
 # Voice assistant: record while KEY is held (or after the wake phrase, until you stop talking),
 # send to desk-voice, show + speak the reply.
 import json, time, requests, _thread, socket, ssl, network, binascii
-import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memories, alerts, schedule, plan, mac
+import adpcm, audio, secrets, flights, music, home, phone, pal, tracker, memories, alerts, schedule, plan, mac, reminders
 
 MAX_SECONDS = 12
 URL = secrets.VOICE_URL + "?k=" + secrets.VOICE_KEY
@@ -70,6 +70,7 @@ def _headers(wake, followup=False):
     hdrs.update(schedule.headers())   # "what's on today?"
     hdrs.update(plan.headers())       # "what's on my list?"
     hdrs.update(mac.headers())        # "lock my Mac", "what's Claude doing?"
+    hdrs.update(reminders.headers())  # "what reminders do I have?"
     hdrs["X-Volume"] = str(audio.volume)   # "turn it up a bit"
     if practicing():
         hdrs["X-Practice"] = "es"
@@ -355,6 +356,8 @@ def _run_board_commands(cmds, run):
             problem = "Memory not removed"
         elif result is False and cmd.get("do") == "mac":
             problem = "Mac not connected"
+        elif result is False and cmd.get("do") == "reminder":
+            problem = "Reminder not set"
     return problem
 
 def _sound(box, body, nl):

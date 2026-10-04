@@ -1,7 +1,7 @@
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
-import pal, companion, tracker, memories, schedule, plan, menu, mac
+import pal, companion, tracker, memories, schedule, plan, menu, mac, reminders
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -299,6 +299,10 @@ def run(cmd):
         return mac.do(cmd.get("action"), cmd.get("target") or "")
     elif do == "dictate":                  # "dictation mode" / "stop dictation"
         mac.dictate(bool(cmd.get("on")))
+    elif do == "reminder":                 # "remind me to ... in half an hour"
+        return reminders.add(cmd.get("text"), cmd.get("minutes"))
+    elif do == "reminder_cancel":          # {"text": ...}, or none for all of them
+        return reminders.cancel(cmd.get("text"))
     elif do in PLAN_DO:                    # tasks and projects; each opens the plan screen
         ok = PLAN_DO[do](cmd)
         show("plan")
@@ -696,6 +700,8 @@ while True:
     if lt and lt[4] != checked_minute:
         checked_minute = lt[4]
         companion.check_time(lt, timer.active, pal.ambient.hearing)
+        for text in reminders.due():
+            companion.reminder(text)
     if screen != "room" and room.weather_due() and wlan.isconnected():
         room.fetch_weather_soon()
     if room.version != weather_seen:

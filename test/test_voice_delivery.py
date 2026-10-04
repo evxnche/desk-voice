@@ -12,7 +12,7 @@ from unittest.mock import patch
 class VoiceDeliveryTests(unittest.TestCase):
     def setUp(self):
         names = ("requests", "_thread", "socket", "ssl", "network", "adpcm", "audio", "secrets",
-                 "flights", "music", "home", "phone", "pal", "tracker", "memories", "alerts", "schedule", "plan")
+                 "flights", "music", "home", "phone", "pal", "tracker", "memories", "alerts", "schedule", "plan", "mac", "reminders")
         modules = {name: types.ModuleType(name) for name in names}
         modules["secrets"].VOICE_URL = "https://example.test/api/voice"
         modules["secrets"].VOICE_KEY = "test"
