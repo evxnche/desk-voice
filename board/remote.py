@@ -22,7 +22,7 @@ input{font:inherit;width:100%;padding:12px;border-radius:12px;border:1px solid v
 <h2>SCREEN</h2><div class=grid id=screens></div>
 <h2>VOLUME</h2><div class=row><button onclick="setVol('step=-1')">&minus;</button>
 <div id=vol style="text-align:center;padding:14px 0">...</div><button onclick="setVol('step=1')">+</button></div>
-<h2>TASKS</h2><div id=tasks style="margin-bottom:8px"></div>
+<h2>TASKS</h2><div id=tasksync style="margin-bottom:8px;opacity:.7;font-size:12px"></div><div id=tasks style="margin-bottom:8px"></div>
 <div class=row><input id=taskin maxlength=60 placeholder="a task">
 <button onclick="planDo('task_add','text='+encodeURIComponent(taskin.value.trim()));taskin.value=''">Add</button></div>
 <button onclick="planDo('tasks_clear_done','')" style="width:100%%;margin-top:8px">Clear finished tasks</button>
@@ -82,12 +82,14 @@ async function setVol(q){await step('/volume?'+q);refresh()}
 async function planDo(d,q){await step('/plan?do='+d+'&'+q);refreshPlan()}
 function btn(label,f){const b=document.createElement('button');b.textContent=label;b.onclick=f;b.style.flex='0 0 auto';return b}
 async function refreshPlan(){try{const p=await(await fetch('/plan')).json();
+document.getElementById('tasksync').textContent=[p.sync&&p.sync.status,p.notes_sync&&p.notes_sync.status].filter(Boolean).join(' · ');
 const tb=document.getElementById('tasks');tb.textContent='';
 if(!p.tasks.length)tb.textContent='Nothing to do';
 for(const t of p.tasks){const row=document.createElement('div');row.className='row';row.style.cssText='margin-bottom:8px;align-items:center';
 const v=document.createElement('div');v.textContent=(t.done?'[x] ':'[ ] ')+t.t;v.style.opacity=t.done?.5:1;
-row.append(v,btn(t.done?'Undo':'Done',()=>planDo('task_done','done='+(t.done?0:1)+'&text='+encodeURIComponent(t.t))),
-btn('Remove',()=>planDo('task_remove','text='+encodeURIComponent(t.t))));tb.appendChild(row)}
+const target=t.id?'id='+encodeURIComponent(t.id):'text='+encodeURIComponent(t.t);
+row.append(v,btn(t.done?'Undo':'Done',()=>planDo('task_done','done='+(t.done?0:1)+'&'+target)),
+btn('Remove',()=>planDo('task_remove',target)));tb.appendChild(row)}
 const pb=document.getElementById('projects');pb.textContent='';
 if(!p.projects.length)pb.textContent='No projects yet';
 for(const pr of p.projects){const row=document.createElement('div');row.className='row';row.style.cssText='margin-bottom:8px;align-items:center';

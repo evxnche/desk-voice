@@ -1,3 +1,6 @@
 node_modules
 .vercel
 .env*
+noty-sync.json
+noty-sync-state.json*
+__pycache__/

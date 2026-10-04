@@ -31,6 +31,7 @@ TABLES = (
         ("finish task", '"mark ... done" / "remove ..."'),
         ("add project", '"add ezwrite to my projects"'),
         ("move project", '"move ezwrite to testing"'),
+        ("notes", '"what is in my work note?" / "show my work note" (key: next page, boot: plan)'),
         ("full screen", '"expand my tasks" (or projects, calendar)'),
         ("calendar", '"what\'s on my calendar tomorrow?"'),
         ("timer", '"25 minute focus timer" / "5 min break"'),

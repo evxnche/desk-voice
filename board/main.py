@@ -2,6 +2,7 @@ import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
 import pal, companion, tracker, memories, schedule, plan, menu, mac, reminders
+import noty_sync, noty_notes
 
 # The firmware has rollback on: an OTA update not confirmed here reverts to the old slot on the next reboot.
 esp32.Partition.mark_app_valid_cancel_rollback()
@@ -212,6 +213,8 @@ def redraw():
         show_limits(footer)
     if screen == "menu":
         menu.enter()
+    if screen == "note":
+        noty_notes.enter()
 
 SCREENS = ("plan", "pal", "limits", "room", "pixel", "flights", "music", "track")
 
@@ -245,7 +248,12 @@ def run(cmd):
     """One command from the remote page or the voice assistant."""
     global active_alert, alert_until
     do = cmd.get("do")
-    if do == "memory_add":
+    if do == "show_note":
+        if not noty_notes.show_note(cmd.get("note_id")):
+            return False
+        show("note")
+        return True
+    elif do == "memory_add":
         return memories.add(cmd.get("text"))
     elif do == "memory_delete":
         text = str(cmd.get("text") or "").strip().lower()
@@ -310,8 +318,8 @@ def run(cmd):
 
 PLAN_DO = {
     "task_add": lambda c: plan.add_task(c.get("text")),
-    "task_done": lambda c: plan.finish_task(c.get("text"), c.get("done", True)),
-    "task_remove": lambda c: plan.remove_task(c.get("text")),
+    "task_done": lambda c: plan.finish_task(c.get("text"), c.get("done", True), task_id=c.get("id")),
+    "task_remove": lambda c: plan.remove_task(c.get("text"), task_id=c.get("id")),
     "tasks_clear_done": lambda c: plan.clear_done(),
     "project": lambda c: plan.set_project(c.get("name"), c.get("stage")),
     "project_remove": lambda c: plan.remove_project(c.get("name")),
@@ -387,7 +395,10 @@ def handle(method, path, q, body):
             "volume": audio.volume, "wake": wake_status(),
             "mac": ("connected, %d Claude session(s)" % len(mac.claude)) if mac.online() else ""})
     if path == "/plan" and method == "GET":
-        return 200, "application/json", json.dumps(plan.state())
+        state = plan.state()
+        state["sync"] = noty_sync.info()
+        state["notes_sync"] = noty_notes.info()
+        return 200, "application/json", json.dumps(state)
     if path == "/plan" and q.get("do") in PLAN_DO:
         cmd = dict(q)
         if "done" in cmd:
@@ -548,6 +559,8 @@ def tick_screen(speaking=False):
         plan.frame()
     if screen == "menu":
         menu.frame()
+    if screen == "note":
+        noty_notes.frame()
     if screen in ("limits", "track"):            # the only screens not redrawn each minute: keep the header clock right
         lt = room.local_time()
         if lt and lt[4] != shown_minute:
@@ -560,6 +573,15 @@ def tick_screen(speaking=False):
 
 next_wifi_try = 0
 web = webserver.Server()
+def plan_changed():
+    noty_sync.changed()
+    noty_notes.refresh_now()
+
+plan.on_change = plan_changed
+noty_sync.start()
+noty_notes.start()
+plan.view_data = noty_notes.view_data
+plan.edit_project = noty_notes.edit_project
 try:
     phone.start()                        # iPhone notifications over Bluetooth
 except Exception as e:
@@ -634,6 +656,8 @@ while True:
         room.fetch_weather_soon()
     elif action == "tap" and screen == "menu":
         menu.next_page()
+    elif action == "tap" and screen == "note":
+        noty_notes.next_page()
     elif action == "tap" and screen == "pal":
         footer = fetch()                         # fresh limits on the status line
         companion.check_limits(last)
@@ -670,6 +694,8 @@ while True:
             leave_takeover()
         elif screen == "menu":
             leave_takeover()
+        elif screen == "note":
+            show("plan")
         elif screen == "plan" and plan.section:   # a section full screen: back to the whole plan
             plan.section = None
             show("plan")
@@ -697,6 +723,8 @@ while True:
         show(SCREENS[0])
     lt = room.local_time()
     schedule.tick(connect, lt)
+    noty_sync.tick(lambda: wlan.isconnected())
+    noty_notes.tick(lambda: wlan.isconnected())
     if lt and lt[4] != checked_minute:
         checked_minute = lt[4]
         companion.check_time(lt, timer.active, pal.ambient.hearing)
