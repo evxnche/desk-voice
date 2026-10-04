@@ -111,7 +111,7 @@ def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
 
 _wake_ready = False                               # wake.init() run since the listener last stopped
 wake_error = ""                                   # why the listener isn't running ("" when it is), for /state
-_wake_retry = 0                                   # listen() doesn't try again before this (ticks_ms)
+_wake_retry = None                                # listen() doesn't try again before this (ticks_ms)
 
 def _pause_listener():
     """Stop the listener; the next listen() re-runs wake.init() (~10 ms), which also resets MultiNet.
@@ -127,7 +127,8 @@ def listen():
     free for it just then), it tries again every 10 s and wake_error says why: it used to switch off
     until the next restart, silently (2026-10-04: deaf for 3.5 h after a restart)."""
     global _wake_ready, wake_error, _wake_retry
-    if wake is None or time.ticks_diff(time.ticks_ms(), _wake_retry) < 0:
+    # (None, not 0, when there's no wait: ticks_diff(now, 0) turns negative after ~6 days of uptime.)
+    if wake is None or _wake_retry is not None and time.ticks_diff(time.ticks_ms(), _wake_retry) < 0:
         return
     try:
         if not _wake_ready:
@@ -137,7 +138,7 @@ def listen():
         _mclk()
         if wake.start():
             _es7210_init()                        # needs BCLK, which wake.start() just started
-        wake_error = ""
+        wake_error, _wake_retry = "", None
     except Exception as e:
         if not wake_error:
             print("wake phrase off:", e)
