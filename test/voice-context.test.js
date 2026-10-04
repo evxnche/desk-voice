@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { sentences } from '../api/look.js';
 import { applyBoardBackstops, boardTools, expandedSection, buildVoiceMessages, decodeDeviceContext, decodeMac, dictation, firstToolFor,
   memoryAcknowledgement, selectVoiceTools } from '../api/voice.js';
 
@@ -260,4 +261,10 @@ test('copy, screen and the other Mac actions queue the right board commands', as
   const offline = boardTools([], '', { memories: [], alert: null, mac: null });
   assert.equal((await offline.mac_copy.execute({ text: 'x' })).ok, false);
   assert.equal((await offline.look_at_screen.execute({ question: 'x' })).ok, false);
+});
+
+test('screen answers end on a whole sentence within the board\'s 400 characters', () => {
+  assert.equal(sentences('Short one.', 400), 'Short one.');
+  assert.equal(sentences('First bit here. Second bit that runs on and on', 30), 'First bit here.');
+  assert.equal(sentences('no sentence ends anywhere in this', 20), 'no sentence ends.');
 });
