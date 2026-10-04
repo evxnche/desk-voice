@@ -334,10 +334,13 @@ PLAN_DO = {
 }
 
 wakes = [0, ""]      # times the wake phrase was heard since boot, and when last (see /state)
+booted = ""          # clock time of this boot (an unexpected restart shows as a new time in /state)
 
 def wake_status():
-    return "heard %d time%s since restart%s" % (wakes[0], "" if wakes[0] == 1 else "s",
-                                                ", last at " + wakes[1] if wakes[1] else "")
+    return "heard %d time%s since restart%s%s%s" % (wakes[0], "" if wakes[0] == 1 else "s",
+                                                    " at " + booted if booted else "",
+                                                    ", last at " + wakes[1] if wakes[1] else "",
+                                                    "; LISTENER OFF: " + audio.wake_error if audio.wake_error else "")
 
 def local_clock():
     lt = room.local_time()
@@ -601,6 +604,7 @@ except Exception as e:
 footer = ""                          # limits.json until they're asked for (fetch_due)
 fetch_due = False
 clock_ok = sync_clock()
+booted = local_clock()
 companion.check_limits(last)
 pal.ambient.on_hear = lambda: companion.heard_you(last)
 tracker.on_news = companion.flight_news

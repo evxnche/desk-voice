@@ -110,6 +110,8 @@ def _i2s(mode, sd, fmt=I2S.STEREO, ibuf=40000):
                bits=16, format=fmt, rate=RATE, ibuf=ibuf)
 
 _wake_ready = False                               # wake.init() run since the listener last stopped
+wake_error = ""                                   # why the listener isn't running ("" when it is), for /state
+_wake_retry = 0                                   # listen() doesn't try again before this (ticks_ms)
 
 def _pause_listener():
     """Stop the listener; the next listen() re-runs wake.init() (~10 ms), which also resets MultiNet.
@@ -121,22 +123,26 @@ def _pause_listener():
 
 def listen():
     """Keep the wake-phrase listener running; call often. Anything that plays or records pauses it
-    (via _i2s) and the next call here resumes it."""
-    global _wake_ready, wake
-    if wake is None:
+    (via _i2s) and the next call here resumes it. If it can't start (no speech model, or no memory
+    free for it just then), it tries again every 10 s and wake_error says why: it used to switch off
+    until the next restart, silently (2026-10-04: deaf for 3.5 h after a restart)."""
+    global _wake_ready, wake_error, _wake_retry
+    if wake is None or time.ticks_diff(time.ticks_ms(), _wake_retry) < 0:
         return
-    if not _wake_ready:
-        try:
+    try:
+        if not _wake_ready:
             wake.init(WAKE_PHRASES)
             wake.threshold(WAKE_THRESHOLD)        # init makes a new MultiNet, at its default
-        except Exception as e:                    # e.g. no speech model flashed: run without it
+            _wake_ready = True
+        _mclk()
+        if wake.start():
+            _es7210_init()                        # needs BCLK, which wake.start() just started
+        wake_error = ""
+    except Exception as e:
+        if not wake_error:
             print("wake phrase off:", e)
-            wake = None
-            return
-        _wake_ready = True
-    _mclk()
-    if wake.start():
-        _es7210_init()                            # needs BCLK, which wake.start() just started
+        wake_error, _wake_retry = str(e) or repr(e), time.ticks_add(time.ticks_ms(), 10000)
+        _pause_listener()                         # start over cleanly next time
 
 _level_buf = bytearray(4096)
 
@@ -278,12 +284,12 @@ def _mean_abs(buf: ptr16, n: int) -> int:
 def record_speech(max_seconds, heard, stop=None, progress=None):
     """After the wake phrase (`heard` from woke()): the listener's audio from 3 s before it was
     recognised, which holds the phrase and maybe the whole question ("gee gee, what's the weather"),
-    until ~0.8 s of quiet follows speech, or 1.5 s pass with none (then the server says "Yes?" and the
-    reply window takes the question; waiting 4 s made a bare "gee gee" take ~7 s to answer). Those 1.5 s
-    are counted from now, when the Pal shows it's listening: audio buffered while the board was busy is
-    read at once and mustn't use them up. Speech = louder than 3x the room's background level
-    (and than 15: in a quiet room speech measured only 20-50, so the old floor of 40
-    cut questions short or waited out the 4 s). Returns mono PCM, or None if `stop()` fired.
+    until ~0.8 s of quiet follows speech, or 3 s pass with none (then the server says "Yes?" and the
+    reply window takes the question). Those 3 s are counted from now, when the Pal shows it's
+    listening, since Evan waits for that before asking: audio buffered while the board was busy is
+    read at once and mustn't use them up (1.5 s, counted in audio, often left no time to start).
+    Speech = louder than 3x the room's background level (and than 15: in a quiet room speech
+    measured only 20-50, so the old floor of 40 cut questions short or waited out the 4 s). Returns mono PCM, or None if `stop()` fired.
     `progress(mv, n)` hears about each new frame (voice.py uploads it as it's recorded)."""
     floor, preroll = heard[2], heard[3]
     buf = bytearray(RATE * 2 * max_seconds)
@@ -317,8 +323,8 @@ def record_speech(max_seconds, heard, stop=None, progress=None):
             n += frame
             if progress:
                 progress(mv, n)
-            if quiet >= 12 if spoke else quiet >= 23 and time.ticks_diff(time.ticks_ms(), began) >= 1500:
-                break                             # 0.8 s after speech, or 1.5 s of none
+            if quiet >= 12 if spoke else quiet >= 47 and time.ticks_diff(time.ticks_ms(), began) >= 3000:
+                break                             # 0.8 s after speech, or 3 s of none
     finally:
         _pause_listener()                         # free core 0 for Wi-Fi while the reply comes back
     return mv[:n]
@@ -333,6 +339,8 @@ def record_followup(max_seconds, wait_ms, stop=None, progress=None, on_start=Non
     spoke (or `stop()` fired). Reads the listener's ring buffer, so listen() must have started it.
     `on_start()` runs when speech starts, then `progress(mv, n)` hears about each frame;
     `waiting(fraction of the wait left)` is called while nothing has been said."""
+    if not _wake_ready:                           # the listener isn't running (see wake_error)
+        return None
     frame = 2048                                  # 64 ms
     buf = bytearray(RATE * 2 * max_seconds + RATE * 2 * wait_ms // 1000 + frame)
     mv = memoryview(buf)
