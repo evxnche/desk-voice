@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>How Desk Pal controls my Mac</title>
+<meta name="description" content="How a voice-controlled ESP32 desk gadget locks, opens apps on, searches with and types into a Mac, and how its dictation mode works.">
+<meta property="og:type" content="article">
+<meta property="og:title" content="How Desk Pal controls my Mac">
+<meta property="og:description" content="How a voice-controlled ESP32 desk gadget locks, opens apps on, searches with and types into a Mac, and how its dictation mode works.">
+<meta name="twitter:card" content="summary">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Martian+Mono:wght@400;600&display=swap">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  /* Layout: one reading column, a four-stop signal strip, then reference tables; styled after the board's reflective mono LCD. */
+  :root {
+    --bg: #ECEEE8;          /* reflective-LCD grey */
+    --panel: #F7F8F4;
+    --fg: #1A1C19;
+    --muted: #5B6058;
+    --line: #C9CEC3;
+    --accent: #2B4AA6;      /* ink blue */
+    --accent-soft: #DDE3F4;
+    --code-bg: #E2E5DD;
+    --font-body: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --font-mono: "Martian Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #131512; --panel: #1A1D19; --fg: #E5E8E1; --muted: #9CA197; --line: #2E322C;
+      --accent: #93A9FF; --accent-soft: #232B45; --code-bg: #20241F; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #131512; --panel: #1A1D19; --fg: #E5E8E1; --muted: #9CA197; --line: #2E322C;
+    --accent: #93A9FF; --accent-soft: #232B45; --code-bg: #20241F; color-scheme: dark;
+  }
+
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 17px; line-height: 1.6; }
+  .page { max-width: 46rem; margin: 0 auto; padding-inline: 20px; padding-block: 48px 72px; display: grid; gap: 44px; }
+  header { display: grid; gap: 12px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-family: var(--font-mono); font-weight: 600; font-size: clamp(28px, 6vw, 40px); line-height: 1.15; letter-spacing: -0.02em; margin: 0; text-wrap: balance; }
+  h2 { font-family: var(--font-mono); font-weight: 600; font-size: 19px; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+  h3 { font-size: 17px; margin: 0; }
+  p { margin: 0; max-width: 65ch; }
+  .lede { font-size: 19px; color: var(--fg); }
+  section { display: grid; gap: 16px; }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--font-mono); font-size: 0.82em; }
+  code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+  .muted { color: var(--muted); }
+
+  /* The signal strip: what happens, in order, when you ask for something */
+  .strip { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow: hidden; }
+  .strip li { padding: 16px 16px 18px; display: grid; gap: 6px; align-content: start; min-width: 0; border-left: 1px solid var(--line); position: relative; }
+  .strip li:first-child { border-left: 0; }
+  .strip .where { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+  .strip .what { font-weight: 700; line-height: 1.3; }
+  .strip .how { font-size: 14.5px; color: var(--muted); line-height: 1.45; }
+  @media (max-width: 720px) {
+    .strip { grid-template-columns: 1fr; }
+    .strip li { border-left: 0; border-top: 1px solid var(--line); }
+    .strip li:first-child { border-top: 0; }
+  }
+
+  /* Three parts */
+  .parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .part { border-top: 2px solid var(--fg); padding-top: 10px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+  .part .name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; }
+  .part p { font-size: 15px; color: var(--muted); }
+  @media (max-width: 720px) { .parts { grid-template-columns: 1fr; } }
+
+  ol.steps { margin: 0; padding-left: 1.4em; display: grid; gap: 10px; max-width: 65ch; }
+  ol.steps li::marker { font-family: var(--font-mono); font-size: 0.85em; color: var(--accent); }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-top: 1px solid var(--line); }
+  thead th { border-top: 0; font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); background: var(--code-bg); }
+  td:first-child { white-space: nowrap; font-style: italic; }
+  @media (max-width: 560px) { td:first-child { white-space: normal; } }
+
+  pre { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.6; }
+  .callout { background: var(--accent-soft); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; }
+  .callout p { font-size: 15.5px; }
+  ul.plain { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; max-width: 65ch; }
+  footer { font-size: 14px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 16px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="eyebrow">Desk Pal · ESP32 voice gadget</div>
+    <h1>How the desk gadget controls my Mac</h1>
+    <p class="lede">You say “gee gee, lock my Mac” to a little screen on the desk, and the Mac locks. The cloud never talks to the Mac directly: the gadget passes the command to a small helper on the Mac over the home Wi-Fi.</p>
+  </header>
+
+  <section aria-labelledby="flow">
+    <h2 id="flow">One command, start to finish</h2>
+    <ol class="strip">
+      <li>
+        <span class="where">On the board</span>
+        <span class="what">Hears “gee gee”</span>
+        <span class="how">The wake word is recognised on the chip itself, then it records you and streams the audio up as you talk.</span>
+      </li>
+      <li>
+        <span class="where">On the server</span>
+        <span class="what">Decides what to do</span>
+        <span class="how">Speech to text, then a language model with tools. A Mac tool doesn’t act; it adds a command to the reply.</span>
+      </li>
+      <li>
+        <span class="where">On the board</span>
+        <span class="what">Speaks and forwards</span>
+        <span class="how">Plays the spoken answer and sends the command to the Mac over the local network.</span>
+      </li>
+      <li>
+        <span class="where">On the Mac</span>
+        <span class="what">Does it</span>
+        <span class="how">A Python helper runs it with built-in macOS tools: AppleScript, <code>pmset</code>, <code>pbcopy</code>.</span>
+      </li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="parts">
+    <h2 id="parts">The three parts</h2>
+    <div class="parts">
+      <div class="part">
+        <span class="name">The board</span>
+        <p>Waveshare ESP32-S3 with a 4.2″ reflective LCD, running MicroPython on custom firmware. Wake word via Espressif’s on-device speech model. It also runs a tiny web server on the home network.</p>
+      </div>
+      <div class="part">
+        <span class="name">The voice server</span>
+        <p>One serverless function on Vercel. Grok speech-to-text, an open-weights GPT model for the reasoning and tool calls, Grok text-to-speech, all through Vercel’s AI Gateway.</p>
+      </div>
+      <div class="part">
+        <span class="name">The Mac helper</span>
+        <p>One Python file, standard library only, kept running by a launchd agent. It listens on a local port and checks in with the board every minute.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="checkin">
+    <h2 id="checkin">How the board knows where the Mac is</h2>
+    <p>The Mac sits behind the home router, so nothing on the internet can reach it, and that’s on purpose. Instead the helper reaches out: every 60 seconds, and straight away when something changes, it sends the board its own address on the Wi-Fi plus a short status (what each recent Claude Code session is doing). It finds the board by its local name, <code>deskpal.local</code>.</p>
+    <p>The board remembers the address. If the Mac hasn’t checked in for 3 minutes, the board treats it as asleep or away. Each time you ask a question, the board tells the server whether the Mac is online, so the model only offers Mac actions when they can actually work.</p>
+  </section>
+
+  <section aria-labelledby="walk">
+    <h2 id="walk">Walkthrough: “gee gee, lock my Mac”</h2>
+    <ol class="steps">
+      <li>The board recognises the wake word, records until you stop talking and uploads the audio while you’re still speaking, so little is left to send at the end.</li>
+      <li>The server transcribes it. The model calls the <code>mac_control</code> tool with <code>{"action": "lock"}</code>. The tool doesn’t touch anything; it adds <code>{"do": "mac", "action": "lock"}</code> to the list of commands that goes back with the spoken reply.</li>
+      <li>The board plays the spoken reply (“Locking your Mac”) and posts the command to the helper: <code>POST /do</code> with a shared secret key. It does this on a background thread, so a slow or sleeping Mac doesn’t hold up the gadget.</li>
+      <li>The helper runs <code>pmset displaysleepnow</code>. Turning the display off locks the Mac, because its screen lock is set to “immediately”.</li>
+      <li>If anything fails, the helper tells the board, and the Pal says “Sorry, I couldn’t do that on your Mac.”</li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="can">
+    <h2 id="can">What it can do</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">You say</th><th scope="col">What runs on the Mac</th></tr></thead>
+        <tbody>
+          <tr><td>“lock my Mac”</td><td><code>pmset displaysleepnow</code></td></tr>
+          <tr><td>“put my Mac to sleep”</td><td><code>pmset sleepnow</code></td></tr>
+          <tr><td>“hide everything”</td><td>AppleScript to System Events: hide every visible app except Finder</td></tr>
+          <tr><td>“open ezwrite”</td><td>Fuzzy-matches the name against the installed apps and a short list of sites (so a transcription like “Easy Right” still works), then opens the app, or the site as a new tab in Arc</td></tr>
+          <tr><td>“close Calculator”</td><td>Quits the app the way Cmd-Q does, so unsaved work still asks first</td></tr>
+          <tr><td>“close that tab”</td><td>Closes the tab the helper opened (it keeps the Arc tab’s id), or the one in front if that’s the one you named; never any other</td></tr>
+          <tr><td>“search YouTube for …”</td><td>Opens the results page</td></tr>
+          <tr><td>“play the second video”</td><td>Runs a small script in that results tab to find the second video as shown on screen, then opens it</td></tr>
+          <tr><td>“Mac volume 30”, “mute”</td><td>AppleScript <code>set volume</code></td></tr>
+          <tr><td>“put that on my clipboard”</td><td><code>pbcopy</code> with the Pal’s last answer</td></tr>
+          <tr><td>“what’s this error?”</td><td>Takes a screenshot with <code>screencapture</code> and sends it to a vision model on the server; the answer comes back to the board, which says it out loud</td></tr>
+          <tr><td>“what’s Claude doing?”</td><td>Nothing runs: the answer comes from the Claude Code status in the last check-in</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">There’s also a procrastination cop: every few seconds the helper notes the app and site in front. After 15 minutes of YouTube or X during work hours, the Pal glares and tells you off.</p>
+  </section>
+
+  <section aria-labelledby="dictation">
+    <h2 id="dictation">Dictation mode</h2>
+    <p>Dictation types what you say into whatever app is in front on the Mac.</p>
+    <ol class="steps">
+      <li><strong>Turn it on:</strong> “gee gee, dictation mode”. After transcribing it, the server spots the phrase with a simple pattern match, before the language model is involved, answers “Dictation on”, and tells the board to switch dictation on.</li>
+      <li><strong>Talk while holding the button.</strong> In dictation mode, recordings made by holding the board’s KEY button are marked as dictation. The server skips the language model completely: it transcribes and sends back one command, <code>type</code>, with the text. The board just beeps.</li>
+      <li><strong>The Mac pastes it.</strong> The helper saves the current clipboard, puts the text on it, presses Cmd-V through System Events, waits half a second and puts the old clipboard back. Pasting beats simulated keystrokes: it’s instant and handles any character.</li>
+      <li><strong>Turn it off:</strong> “gee gee, stop dictation”, or just leave it. It switches itself off after 10 minutes without a dictated line.</li>
+    </ol>
+<pre>def type_text(text):
+    before = pbpaste()                      # keep the clipboard
+    pbcopy(text)
+    osascript('tell application "System Events" to keystroke "v" using command down')
+    time.sleep(0.5)
+    pbcopy(before)                          # and put it back</pre>
+    <div class="callout">
+      <h3>Why dictation uses the button</h3>
+      <p>The wake word still works during dictation, so “gee gee, stop dictation” always gets through. Typing only happens while you hold KEY, so a conversation in the room never ends up in your document. For a single line there’s a shortcut: “gee gee, type see you at five”.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="safety">
+    <h2 id="safety">Security and permissions</h2>
+    <ul class="plain">
+      <li>The Mac is only reachable from the local network, and the cloud server never connects to it.</li>
+      <li>Every request between the board and the helper carries a shared secret key. The helper rejects anything else, and its log never prints the key.</li>
+      <li>macOS asks once for each permission: Accessibility (for the Cmd-V typing), Screen Recording (for “what’s this error?”), and control of System Events and the browser.</li>
+      <li>Every Mac action is a fixed command the helper knows. The model can only choose which one to run and what to pass to it, never run anything of its own.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Built with MicroPython on an ESP32-S3, a Node serverless function on Vercel (AI SDK and AI Gateway), and the Python standard library on the Mac.
+  </footer>
+</div>
+
+</body>
+</html>
