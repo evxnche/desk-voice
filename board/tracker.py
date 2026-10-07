@@ -31,7 +31,7 @@ _busy = False
 _landed_ms = None
 _viewed_ms = time.ticks_ms()   # last time its screen was up
 _fa_at = time.ticks_ms()       # FlightAware may be asked from then on
-sched = None         # FlightAware's answer: {state, off_uk, on_uk...}
+sched = None         # FlightAware's answer: {state, off_local, on_local...}
 _cs = ""             # the callsign it was last heard under (Air France's can differ from the number)
 _said = set()        # "takeoff", "descent", "landed": each said once per flight
 on_news = None       # companion's hook: on_news(text)
@@ -226,8 +226,8 @@ def status():
         return "%s landed" % flight
     if last and last.get("eta_min"):
         return "%s lands ~%s" % (flight, _clock(add_min=last["eta_min"]))
-    if not last and sched and sched.get("state") == "scheduled" and sched.get("off_uk"):
-        return "%s takes off ~%s" % (flight, sched["off_uk"])
+    if not last and sched and sched.get("state") == "scheduled" and sched.get("off_local"):
+        return "%s takes off ~%s" % (flight, sched["off_local"])
     return "%s: %s" % (flight, "in the air" if last else "not seen yet")
 
 # A small aeroplane pointing up (north), nose at y = -9; rotated to the plane's track.
@@ -335,13 +335,13 @@ def _draw_static(d):
         big = "%d min" % m if m < 100 else "%dh%02d" % (m // 60, m % 60)
         font5.text(c, "lands in", 256, 42)
         d.text_large(big, 256, 54, 3 if len(big) * 24 <= 142 else 2)
-        font5.text(c, "about %s uk time" % _clock(add_min=m), 256, 82)
+        font5.text(c, "about %s %s time" % (_clock(add_min=m), room.TZ.lower()), 256, 82)
     elif last:
         d.text_large("in the air" if not last.get("on_ground") else "on ground", 256, 56, 2)
-    elif sched and sched.get("state") == "scheduled" and sched.get("off_uk"):
+    elif sched and sched.get("state") == "scheduled" and sched.get("off_local"):
         font5.text(c, "takes off about", 256, 42)
-        d.text_large(sched["off_uk"], 256, 56, 2)
-        font5.text(c, "uk time", 256, 82)
+        d.text_large(sched["off_local"], 256, 56, 2)
+        font5.text(c, "%s time" % room.TZ.lower(), 256, 82)
     else:
         font5.text(c, "not on radar now", 256, 42)
     y = 102

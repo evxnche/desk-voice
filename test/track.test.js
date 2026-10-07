@@ -75,7 +75,7 @@ test('schedule picks the flight nearest now: tomorrow\'s departure over last wee
   ] });
   const s = await schedule('AFR12', now);
   assert.equal(s.state, 'scheduled');
-  assert.match(s.off_uk, /^\d{1,2}:\d\d(am|pm)$/);
+  assert.match(s.off_local, /^\d{1,2}:\d\d(am|pm)$/);
 });
 
 test('landed recently: state landed', async () => {

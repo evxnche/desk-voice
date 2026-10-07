@@ -15,7 +15,7 @@ LIMIT_PCT = 90
 MORNING_HELLO = True
 HELLO_FROM, HELLO_UNTIL = 7, 12
 
-DEEP_WORK_AT = (10, 30)       # weekdays, UK time
+DEEP_WORK_AT = (10, 30)       # weekdays, local time
 DEEP_WORK_MIN = 45
 DEEP_WORK_WINDOW = 60         # keeps offering this long after, if it hasn't heard you yet
 HEADS_UP_MIN = 10             # warn this many minutes before a meeting

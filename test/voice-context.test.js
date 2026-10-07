@@ -289,8 +289,8 @@ test('timed reminders are told apart from tasks, and never leave a timer behind'
     { do: 'reminder_cancel', text: 'pay rent' }]);
 });
 
-test('reminder clock times count from UK time, rolling over to tomorrow', () => {
-  const at = new Date('2026-10-04T13:00:00Z');                // 2pm in London (BST)
+test('reminder clock times count from India time, rolling over to tomorrow', () => {
+  const at = new Date('2026-10-04T08:30:00Z');                // 2pm in India
   assert.equal(minutesUntil('15:00', false, at), 60);
   assert.equal(minutesUntil('13:30', false, at), 23.5 * 60);
   assert.equal(minutesUntil('15:00', true, at), 25 * 60);

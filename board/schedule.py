@@ -1,7 +1,7 @@
 # The owner's calendars (private iCal links pasted on deskpal.local), for companion.py: heads-ups
 # before meetings, and whether there's time for a focus session; plan.py lists them. desk-voice
 # /api/calendar reads the links (sent space-separated as X-Calendar) and returns today's and
-# tomorrow's events from all of them, merged, in UK time, plus the next few events after today.
+# tomorrow's events from all of them, merged, in local time (room.TZ), plus the next few events after today.
 import time, json, requests, _thread
 import secrets
 
@@ -12,7 +12,7 @@ REFRESH_MS = 10 * 60 * 1000
 MAX_LINKS = 3
 links = []
 link = ""           # the X-Calendar value: all the links, space-separated ("" = none)
-today = []          # [{"s": start min, "e": end min, "t": title[, "all_day": True]}], UK time
+today = []          # [{"s": start min, "e": end min, "t": title[, "all_day": True]}], local time
 tomorrow = []
 upcoming = []       # [{"day": "Tomorrow" | "Fri 3 Oct", "s": start min, "t": title[, "all_day": True]}]
 error = ""

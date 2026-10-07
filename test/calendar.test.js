@@ -51,14 +51,14 @@ END:VEVENT
 END:VCALENDAR
 `;
 
-test('today and tomorrow in London time, recurring, cancelled and all-day handled', async () => {
+test('today and tomorrow in India time, recurring, cancelled and all-day handled', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(ICS);
   try {
     const cal = await getCalendar('webcal://example.com/basic.ics', new Date('2026-09-28T09:00:00Z'));
     assert.deepEqual(cal.today, [
-      { s: 14 * 60, e: 14 * 60 + 30, t: 'Team sync' },
-      { s: 17 * 60 + 30, e: 18 * 60 + 15, t: 'Dentist' },
+      { s: 18 * 60 + 30, e: 19 * 60, t: 'Team sync' },        // 2pm London (BST) is 6:30pm in India
+      { s: 22 * 60, e: 22 * 60 + 45, t: 'Dentist' },
     ]);
     assert.deepEqual(cal.tomorrow, [{ s: 0, e: 1440, t: 'Cousins visiting', all_day: true }]);
   } finally {
@@ -74,8 +74,8 @@ test('upcoming: the next events after today, soonest first, even with none today
     const cal = await getCalendar('webcal://example.com/basic.ics', new Date('2026-10-01T09:00:00Z'));
     assert.deepEqual(cal.today, []);
     assert.deepEqual(cal.upcoming.slice(0, 2), [
-      { day: 'Mon 5 Oct', date: '2026-10-05', s: 14 * 60, t: 'Team sync' },
-      { day: 'Mon 12 Oct', date: '2026-10-12', s: 14 * 60, t: 'Team sync' },
+      { day: 'Mon 5 Oct', date: '2026-10-05', s: 18 * 60 + 30, t: 'Team sync' },
+      { day: 'Mon 12 Oct', date: '2026-10-12', s: 18 * 60 + 30, t: 'Team sync' },
     ]);
     const sunday = await getCalendar('webcal://example.com/basic.ics', new Date('2026-09-27T09:00:00Z'));
     assert.deepEqual(sunday.upcoming.slice(0, 3).map((e) => [e.day, e.t]),

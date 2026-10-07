@@ -266,7 +266,7 @@ def _at(stamp):
     if stamp is None or not now:
         return ""
     stamp = int(stamp) + 30                                     # to the nearest minute: 2:59:59 is 3pm
-    lt = time.localtime(stamp + room._uk_offset(stamp))
+    lt = time.localtime(stamp + room._offset(stamp))
     if stamp - time.time() >= 8 * 86400:                       # a weekday would be ambiguous
         return "%d %s" % (lt[2], room.MONTHS[lt[1] - 1])
     at = room.clock(lt[3], lt[4]).replace(":00", "")

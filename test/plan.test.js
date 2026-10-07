@@ -46,7 +46,7 @@ test('deskPalNote falls back to the title when the id is gone', () => {
 });
 
 test('calendarScreen drops finished events and labels days', () => {
-  const now = new Date('2026-10-07T12:00:00Z');   // 13:00 in London
+  const now = new Date('2026-10-07T07:30:00Z');   // 1pm in India
   const cal = { today: [{ s: 540, e: 600, t: 'Gone' }, { s: 840, e: 900, t: 'Sync' }],
     upcoming: [{ day: 'Tomorrow', s: 600, t: 'Dentist' }], failed: 0 };
   assert.deepEqual(calendarScreen(cal, now).rows.map((r) => [r.k, r.time, r.t]), [

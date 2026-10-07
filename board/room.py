@@ -1,6 +1,6 @@
 # Today screen: an animation of the weather (sun, clouds, rain, snow, fog, storm, a moon at night) with
 # the details beside it and today's + tomorrow's forecast below; date and time small in the header.
-# UK local time from NTP, weather from desk-voice /api/weather (Open-Meteo).
+# Local time (TZ) from NTP, weather from desk-voice /api/weather (Open-Meteo).
 import time, requests, _thread, math
 from array import array
 import dashboard, font5, secrets, home, palicon
@@ -49,8 +49,15 @@ def fetch_weather_soon():
     except OSError:
         fetch_weather()                         # no stack free: fetch here instead
 
-def _uk_offset(t):
-    """BST (+1h) from 01:00 UTC on the last Sunday of March to the last Sunday of October."""
+# The owner's time zone; must match the server's (desk-voice lib/calendar.js TZ).
+# "India": IST, UTC+5:30 all year. "UK": GMT, and BST in summer.
+TZ = "India"
+
+def _offset(t):
+    """Seconds ahead of UTC at UTC time t. UK: BST (+1h) from 01:00 UTC on the last Sunday of March
+    to the last Sunday of October."""
+    if TZ == "India":
+        return 19800
     y = time.localtime(t)[0]
     def last_sunday(month):
         ts = time.mktime((y, month, 31, 1, 0, 0, 0, 0))
@@ -66,7 +73,7 @@ def local_time():
     t = time.time()
     if time.localtime(t)[0] < 2025:              # clock never synced
         return None
-    return time.localtime(t + _uk_offset(t))
+    return time.localtime(t + _offset(t))
 
 def _degrees(c, x, y, r):
     c.ellipse(x + r, y + r, r, r, 1)

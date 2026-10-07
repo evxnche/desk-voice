@@ -19,7 +19,7 @@ SEEN = {"ok": True, "flight": "BA36", "seen": True, "lat": 55.0, "lon": 24.0, "a
 LANDED = dict(SEEN, on_ground=True, alt_ft=0, km_left=3, eta_min=None)
 EST = {"ok": True, "flight": "AF12", "seen": False, "est": True, "lat": 50.0, "lon": -30.0, "track": 260,
        "speed_kmh": 730, "over": "the open sea", "km_left": 2600, "km_total": 5840, "eta_min": 215,
-       "schedule": {"state": "air", "off_uk": "2:05pm", "on_uk": "10:40pm"},
+       "schedule": {"state": "air", "off_local": "2:05pm", "on_local": "10:40pm"},
        "from": {"city": "Paris", "code": "CDG", "lat": 49.0, "lon": 2.5},
        "to": {"city": "New York", "code": "JFK", "lat": 40.6, "lon": -73.8}}
 
@@ -116,10 +116,10 @@ class TrackerTests(unittest.TestCase):
         start = self.tracker.where()
         self.now[0] += 10 * 60 * 1000                    # 10 minutes later, still heading west
         self.assertLess(self.tracker.where()[0], start[0])
-        self.assertEqual(self.tracker.sched["on_uk"], "10:40pm")
+        self.assertEqual(self.tracker.sched["on_local"], "10:40pm")
 
     def test_flightaware_says_landed(self):
-        self.tracker.start("AF12", dict(EST, est=False, schedule={"state": "landed", "on_uk": "9:12pm"}))
+        self.tracker.start("AF12", dict(EST, est=False, schedule={"state": "landed", "on_local": "9:12pm"}))
         self.assertTrue(self.tracker.landed)
         self.assertEqual(self.news, ["AF12 has landed in New York."])
 
