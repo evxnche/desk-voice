@@ -606,7 +606,12 @@ export function boardTools(cmds, spotifyRefresh, deviceContext = { memories: [],
         cmds.push({ do: 'screen', name: 'music' });
         if (!spotifyRefresh) return { ok: false, error: 'Spotify is not connected to the gadget yet' };
         try {
-          const r = await spotify.playSearch(spotifyRefresh, query, kind || 'playlist');
+          // Spotify open nowhere: the Mac opens it and plays this (the Web API can't start the app).
+          const onMac = deviceContext.mac && ((uri) => {
+            cmds.push({ do: 'mac', action: 'spotify', target: uri });
+            return { on: 'the Mac, which is opening Spotify' };
+          });
+          const r = await spotify.playSearch(spotifyRefresh, query, kind || 'playlist', onMac);
           return { ok: true, ...r };
         } catch (e) {
           return { ok: false, error: e.message };
@@ -648,7 +653,7 @@ export function reply(heard, text, pcm, adpcm, radar = null, board = [], extra =
 
 // How the transcriber may write a wake phrase, when it's not always spelled as said.
 const WAKE_SPELLINGS = {
-  'gee gee': 'gigi|gee[ .,-]*gee|g\\.?[ .-]?g|e\\.?[ ]?g',   // "Gigi", "gee gee", "GG", "G.G.", "G-G", "E.G."
+  'gee gee': 'gigi|gee[ .,-]*gee|j(?:i|ee)[ .,-]*j(?:i|ee)|g\\.?[ .-]?g|e\\.?[ ]?g',   // "Gigi", "gee gee", "Ji ji", "GG", "G.G.", "G-G", "E.G."
   'hey ava': '(?:(?:hey|hi|hay|a)[ ,.!-]*)?(?:ava|eva|avah)',   // "Hey Ava", "Hi Eva", or just "Ava"
 };
 const ANY_WAKE = Object.values(WAKE_SPELLINGS).join('|');

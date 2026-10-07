@@ -46,10 +46,33 @@ def board_ip(fresh=False):
                 return f.read().strip()
         except OSError:
             pass
-    ip = socket.gethostbyname(BOARD)
+    try:
+        ip = socket.gethostbyname(BOARD)
+    except OSError:
+        ip = find_board()                     # some routers (the Jio one at home) don't pass .local lookups
     with open(IP_CACHE, "w") as f:
         f.write(ip)
     return ip
+
+
+def find_board():
+    """The board's address without deskpal.local: ask every address on this Mac's network (a /24) for
+    the board's /wifi page, 64 at a time (~3 s). Raises OSError when nothing answers like the board."""
+    prefix = my_ip("1.1.1.1").rsplit(".", 1)[0]
+
+    def probe(ip):
+        try:
+            data = json.load(urllib.request.urlopen("http://%s/wifi" % ip, timeout=1))
+            return ip if "saved" in data and "home" in data else None
+        except Exception:
+            return None
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(64) as pool:
+        for ip in pool.map(probe, ["%s.%d" % (prefix, n) for n in range(1, 255)]):
+            if ip:
+                return ip
+    raise OSError("no board on %s.0/24" % prefix)
 
 
 def my_ip(board):
@@ -244,6 +267,28 @@ def type_text(text):
     subprocess.run(["pbcopy"], input=before, env=UTF8)
 
 
+def play_spotify(uri):
+    """Open Spotify (in the background) and play `uri`. A cold start takes a few seconds before it
+    takes commands, so keep asking until it's playing."""
+    try:
+        subprocess.run(["open", "-g", "-a", "Spotify"], check=True, capture_output=True)
+        for _ in range(15):
+            time.sleep(1)
+            try:
+                osascript('tell application "Spotify" to play track "%s"' % uri)
+                time.sleep(1)
+                state = subprocess.run(["osascript", "-e", 'tell application "Spotify" to player state as string'],
+                                       capture_output=True, text=True).stdout.strip()
+                if state == "playing":
+                    return
+            except subprocess.CalledProcessError:
+                pass
+        raise RuntimeError("not playing after 30 s")
+    except Exception as e:
+        print("spotify failed:", e, flush=True)
+        say_on_board("screen", "Sorry, I couldn't start Spotify on your Mac.")
+
+
 def run(action, target):
     print(action, "(%d chars)" % len(target) if action in ("copy", "type", "screen") else target, flush=True)
     if action == "lock":
@@ -273,6 +318,10 @@ def run(action, target):
             raise ValueError("not a YouTube video")
         print("  ->", url, flush=True)
         open_page(url)
+    elif action == "spotify":             # play this here: Spotify wasn't open anywhere for the Web API
+        if not re.fullmatch(r"spotify:(playlist|track|album|artist):\w{22}", target):
+            raise ValueError("not a Spotify item")
+        threading.Thread(target=play_spotify, args=(target,), daemon=True).start()
     elif action == "close_tab":
         close_tab(target.strip())
     elif action == "screen":

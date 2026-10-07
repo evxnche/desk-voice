@@ -38,18 +38,14 @@ def board_ip():
 
 def send(agent, project, kind, message):
     body = json.dumps({"agent": agent, "project": project, "kind": kind, "message": message[:240]}).encode()
-    for attempt in (0, 1):
-        try:
-            url = "http://%s/agent?k=%s" % (board_ip(), KEY)
-            urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=1.5).read()
-            return
-        except Exception:
-            try:
-                os.remove(IP_CACHE)  # the board may have a new address; look it up once more
-            except OSError:
-                pass
-            if attempt:
-                return
+    # A failed send keeps the remembered address: the board may just be restarting, and deleting it
+    # left the Mac unable to find the board where deskpal.local doesn't resolve. deskpal-mac.py looks
+    # the board up again within a minute when its address really changed.
+    try:
+        url = "http://%s/agent?k=%s" % (board_ip(), KEY)
+        urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=1.5).read()
+    except Exception:
+        pass
 
 
 def claude(event):
