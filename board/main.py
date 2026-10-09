@@ -1,3 +1,9 @@
+import machine
+# Freeze guard: the board has no reset button, and when this program got stuck (a hang in a driver, a
+# network read that never returned) USB and Wi-Fi died with it until it was plugged into the Mac.
+# If the main loop goes 2 min without feeding this, the chip restarts itself and saves a core dump of
+# where it was stuck. It can't be switched off: a main.py stopped over USB (mpremote) restarts in 2 min.
+wdt = machine.WDT(timeout=120000)
 import network, time, json, requests, ntptime, esp32
 from machine import Pin
 import dashboard, secrets, room, critter, voice, flights, timer, alerts, music, remote, webserver, home, audio, phone, usage
@@ -166,6 +172,7 @@ def converse(result, opened=lambda: False):
     the conversation stays on it, with the little Pal in its header; otherwise it's the full-screen Pal.
     `opened()`: has this conversation opened a screen yet. Returns the last result and whether it did."""
     while isinstance(result, dict) or result == "interrupt":
+        wdt.feed()                               # a long back-and-forth stays out of the main loop
         result = voice.ask(key, boot, connect, run, tick_screen, followup=True, keep_screen=opened(),
                            tapped=key_tapped, opened=opened)
     return result, opened()
@@ -337,10 +344,12 @@ PLAN_DO = {
 
 wakes = [0, ""]      # times the wake phrase was heard since boot, and when last (see /state)
 booted = ""          # clock time of this boot (an unexpected restart shows as a new time in /state)
+froze = machine.reset_cause() == machine.WDT_RESET   # this boot is the freeze guard's restart
 
 def wake_status():
-    return "heard %d time%s since restart%s%s%s" % (wakes[0], "" if wakes[0] == 1 else "s",
+    return "heard %d time%s since restart%s%s%s%s" % (wakes[0], "" if wakes[0] == 1 else "s",
                                                     " at " + booted if booted else "",
+                                                    " (it froze; watchdog restarted it)" if froze else "",
                                                     ", last at " + wakes[1] if wakes[1] else "",
                                                     "; LISTENER OFF: " + audio.wake_error if audio.wake_error else "")
 
@@ -617,6 +626,7 @@ shown_minute = None
 weather_seen = room.version
 
 while True:
+    wdt.feed()
     web.poll(handle)
     phone.tick()
     while phone.inbox:
