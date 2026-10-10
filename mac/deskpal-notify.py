@@ -15,10 +15,12 @@ Each alert also goes to desk-voice's /api/agent mailbox, which the glasses app p
 
 Always exits 0 within ~2 s: a board that's off or on another network must never slow an agent.
 """
-import json, os, socket, sys, threading, time, urllib.request
+import json, os, socket, ssl, sys, threading, time, urllib.request
 
 BOARD = "deskpal.local"
 CLOUD = "https://desk-voice.vercel.app/api/agent"
+# python.org's Python (what `python3` is here) has no CA certificates of its own; macOS ships a bundle.
+TLS = ssl.create_default_context(cafile="/etc/ssl/cert.pem") if os.path.exists("/etc/ssl/cert.pem") else None
 LONG_TURN_S = 60
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(HERE, "key")).read().strip()
@@ -57,7 +59,7 @@ def send(agent, project, kind, message):
         try:
             req = urllib.request.Request(CLOUD + "?k=" + KEY, data=body, method="POST",
                                          headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=1.8).read()
+            urllib.request.urlopen(req, timeout=1.8, context=TLS).read()
         except Exception:
             pass
 
