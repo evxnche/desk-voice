@@ -108,7 +108,7 @@ class RLCD:
         self.write_cmd(0xC0); self.write_data(0x11); self.write_data(0x04)
         # Source voltages, oscillator and frame rate are Waveshare's values for this
         # 4.2" panel. The old ones (0x41/0xA6/0x05, and a decimal 19 typo in C5)
-        # matched no reference driver; suspected cause of bands of dark lines that came and went.
+        # matched no reference driver.
         self.write_cmd(0xC1); self.write_data([0x69, 0x69, 0x69, 0x69])
         self.write_cmd(0xC2); self.write_data([0x19, 0x19, 0x19, 0x19])
         self.write_cmd(0xC4); self.write_data([0x4B, 0x4B, 0x4B, 0x4B])
