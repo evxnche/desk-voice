@@ -11,11 +11,14 @@ Codex `notify` (JSON as the last argv): agent-turn-complete -> "done".
 Each Claude session's state (working / waiting / done, its project and your last prompt) is kept in
 turns/<session> for deskpal-mac.py, which tells the board ("what's Claude doing?").
 
+Each alert also goes to desk-voice's /api/agent mailbox, which the glasses app polls.
+
 Always exits 0 within ~2 s: a board that's off or on another network must never slow an agent.
 """
-import json, os, socket, sys, time, urllib.request
+import json, os, socket, sys, threading, time, urllib.request
 
 BOARD = "deskpal.local"
+CLOUD = "https://desk-voice.vercel.app/api/agent"
 LONG_TURN_S = 60
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(HERE, "key")).read().strip()
@@ -38,14 +41,31 @@ def board_ip():
 
 def send(agent, project, kind, message):
     body = json.dumps({"agent": agent, "project": project, "kind": kind, "message": message[:240]}).encode()
-    # A failed send keeps the remembered address: the board may just be restarting, and deleting it
-    # left the Mac unable to find the board where deskpal.local doesn't resolve. deskpal-mac.py looks
-    # the board up again within a minute when its address really changed.
-    try:
-        url = "http://%s/agent?k=%s" % (board_ip(), KEY)
-        urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=1.5).read()
-    except Exception:
-        pass
+
+    def to_board():
+        # A failed send keeps the remembered address: the board may just be restarting, and deleting it
+        # left the Mac unable to find the board where deskpal.local doesn't resolve. deskpal-mac.py looks
+        # the board up again within a minute when its address really changed.
+        try:
+            url = "http://%s/agent?k=%s" % (board_ip(), KEY)
+            urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=1.5).read()
+        except Exception:
+            pass
+
+    def to_glasses():
+        # The glasses app (ezmeta) polls this mailbox, so the alert reaches you away from the desk too.
+        try:
+            req = urllib.request.Request(CLOUD + "?k=" + KEY, data=body, method="POST",
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=1.8).read()
+        except Exception:
+            pass
+
+    sends = [threading.Thread(target=f, daemon=True) for f in (to_board, to_glasses)]
+    for t in sends:
+        t.start()
+    for t in sends:
+        t.join(2)
 
 
 def claude(event):

@@ -23,7 +23,7 @@ const RATE = 15625;
 const CHAT_MODEL = process.env.CHAT_MODEL || 'openai/gpt-oss-120b';
 const MAX_SECONDS = 15;
 
-function toWav(samples, rate) {
+export function toWav(samples, rate) {
   const data = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
   const h = Buffer.alloc(44);
   h.write('RIFF', 0); h.writeUInt32LE(36 + data.length, 4); h.write('WAVE', 8);
@@ -34,7 +34,7 @@ function toWav(samples, rate) {
 }
 
 // The board's mics are quiet; scale the recording so its peak sits near 80%.
-function normalize(samples) {
+export function normalize(samples) {
   let peak = 1;
   for (const s of samples) peak = Math.max(peak, Math.abs(s));
   const gain = Math.min(30, (0.8 * 32767) / peak);
@@ -68,7 +68,7 @@ function resample(samples, from, to) {
   return out;
 }
 
-async function limitsSummary() {
+export async function limitsSummary() {
   if (!process.env.LIMITS_URL) return '';
   try {
     const res = await fetch(process.env.LIMITS_URL, { signal: AbortSignal.timeout(3000) });
@@ -674,7 +674,7 @@ const TTS_VOICE = process.env.TTS_VOICE || (TTS_MODEL.startsWith('openai/') ? 'a
 
 let yesPcm = null;   // the spoken "Yes?" after a bare wake phrase
 
-export async function speak(text) {
+export async function speak(text, outRate = RATE) {
   const openai = TTS_MODEL.startsWith('openai/');
   const speech = await generateSpeech({
     model: gateway.speechModel(TTS_MODEL),
@@ -686,13 +686,13 @@ export async function speak(text) {
   const audio = Buffer.from(speech.audio.uint8Array);
   const { rate, samples } = openai ? parseWav(audio)
     : { rate: 24000, samples: new Int16Array(audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.length - (audio.length % 2))) };
-  return resample(samples, rate, RATE);
+  return resample(samples, rate, outRate);
 }
 
 const NEWSY = /\b(latest|news|headlines?|updates?|today|tonight|yesterday|this (week|month|year)|current(ly)?|recent(ly)?|right now|happening|war|election|president|prime minister|score|won|stock|price|release[ds]?)\b/i;
 const OWN_TOOLS = /\b(weather|temperature|rain|forecast|sunny|wind|flights?|planes?|aircraft|radar|zoom|limits?)\b/i;
 
-function needsSearch(question) {
+export function needsSearch(question) {
   return NEWSY.test(question) && !OWN_TOOLS.test(question);
 }
 
@@ -727,7 +727,7 @@ const WEATHERY = /\b(weather|temperature|forecast|rain(ing|y)?|sunny|snow(ing|y)
 // first, from the last 10 minutes. An empty question means the gadget spoke up on its own.
 const SPOKE_UP = '(Nothing. You spoke up on your own.)';
 
-function historyFrom(request) {
+export function historyFrom(request) {
   try {
     const raw = request.headers.get('x-history');
     if (!raw) return [];
@@ -975,7 +975,7 @@ export function expandedSection(heard) {
 // skips show_screen; the limits screen opens anyway.
 const LIMITSY = /\b(claude|codex|agent|usage|rate)\b.*\blimits?\b|\blimits?\b.*\b(claude|codex|agents?)\b|\b(my|agent) usage\b/i;
 
-const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
+export const FORGET = /\b(forget (that|it|this|everything|what i said|our conversation)|start (over|again)|new conversation|clear (your|the) memory)\b/i;
 
 // Spanish practice: "let's practice Spanish" turns it on, "stop practicing" or "back to English" off.
 // The board keeps the mode (X-Practice: es) and drops it after 10 minutes without a practice turn.
@@ -999,7 +999,7 @@ const TUTOR =
   'conversation. Use no markdown, lists, emoji or pronunciation spellings. The gadget\'s other features are paused ' +
   'while practicing: if they ask for one (weather, timers, music...), tell them in English to say "stop practicing" first.';
 
-async function practiceAnswer(history, heard, starting) {
+export async function practiceAnswer(history, heard, starting) {
   try {
     const result = await generateText({
       model: CHAT_MODEL,
@@ -1034,7 +1034,7 @@ const TRANSCRIBE_PROMPT = 'English only, in Latin letters. Someone talking to a 
 // hint once wrote Urdu script. grok-stt reads only the xai options: left to guess, a bare "gee gee"
 // came back as Hindi "जी जी।" (2026-10-04, live and with `say`). Spanish practice keeps guessing so
 // Spanish is written as Spanish.
-async function transcribeQuestion(wav, practicing) {
+export async function transcribeQuestion(wav, practicing) {
   const providerOptions = practicing ? {} : { openai: { language: 'en', prompt: TRANSCRIBE_PROMPT }, xai: { language: 'en' } };
   for (const model of [STT_MODEL, STT_BACKUP]) {
     try {
