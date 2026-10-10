@@ -1018,7 +1018,7 @@ export async function practiceAnswer(history, heard, starting) {
 
 // A reply after an answer comes with no wake phrase, so noise, a cough or a "thanks" may be all it
 // is: stay quiet for those instead of answering.
-const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|ok(ay)?|cool|great|bye|you|mm+|hmm+|uh+|um+)\W*$/i;
+export const NOT_A_REPLY = /^\W*(thanks?( you)?|thank you( very much| so much)?|cheers|ok(ay)?|cool|great|bye|you|mm+|hmm+|uh+|um+)\W*$/i;
 
 const STT_MODEL = process.env.STT_MODEL || 'spacexai/grok-stt';
 const STT_BACKUP = 'openai/gpt-4o-mini-transcribe';
@@ -1062,6 +1062,13 @@ export async function POST(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) {
     return new Response('unauthorized', { status: 401 });
+  }
+  // /api/say (vercel.json rewrites it here: the Hobby plan allows 12 functions). The Pal speaking up on its
+  // own (board/companion.py): the words as the body, back in the same format as an answer.
+  if (url.searchParams.get('say') === '1') {
+    const words = (await request.text()).trim().slice(0, 400);
+    if (!words) return new Response('nothing to say', { status: 400 });
+    return reply('', words, await speak(words), request.headers.get('x-audio') === 'adpcm');
   }
   const t0 = Date.now();
   const body = Buffer.from(await request.arrayBuffer());

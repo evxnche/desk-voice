@@ -2,7 +2,13 @@
 // POST ?k=VOICE_KEY with 16-bit little-endian mono PCM at 16 kHz (the glasses mic, recorded by the phone);
 // optional &lat=..&lon=.. (the phone's location) for the weather. X-History and X-Practice: es as on the board.
 // Replies with one JSON line ({heard, reply[, action][, forget][, practice]}) + "\n" + the reply as a 24 kHz mono WAV.
+// X-Followup: 1 marks the reply window after an answer: silence or a "thanks" gets {heard, ignored: true} and no audio.
 // action 'read_articles' starts ezRead: the app reads the article inbox aloud.
+//
+// Also the agent pager mailbox (lib/pager.js), as /api/agent (vercel.json rewrites it to ?box=agent; one function
+// instead of two keeps the project within the Hobby plan's 12):
+//   POST {agent, project, kind: 'done'|'needs', message}  from mac/deskpal-notify.py
+//   GET  ?since=<ms>  -> {events: [...oldest first], now}  polled by the iPhone app
 import { generateText, jsonSchema, stepCountIs, tool } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, geocode } from '../lib/flights.js';
@@ -10,8 +16,8 @@ import { getWeather } from '../lib/weather.js';
 import { describe as describeCalendar, getCalendars, TZ, TZ_PLACE } from '../lib/calendar.js';
 import { fetchNotyNotes, listNotyNotes, notyContext, readNotyNote, searchNotyNotes } from '../lib/noty.js';
 import { addNotyTask, INBOX_TITLE, saveNotyNote } from '../lib/noty-write.js';
-import { eventsSince } from '../lib/pager.js';
-import { FORGET, historyFrom, limitsSummary, needsSearch, normalize, practiceAnswer, practiceSwitch, speak, toWav,
+import { cleanEvent, eventsSince, pushEvent } from '../lib/pager.js';
+import { FORGET, historyFrom, limitsSummary, needsSearch, normalize, NOT_A_REPLY, practiceAnswer, practiceSwitch, speak, toWav,
   transcribeQuestion } from './voice.js';
 
 const IN_RATE = 16000;
@@ -134,15 +140,26 @@ function system(limits, hasCalendar) {
     `It is ${now} in ${TZ_PLACE}.` + (limits ? ` The owner's AI coding agent usage limits right now: ${limits}.` : '');
 }
 
-export function GET(request) {
+export async function GET(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) return new Response('unauthorized', { status: 401 });
-  return new Response(null, { status: 204 });
+  if (url.searchParams.get('box') === 'agent') {
+    const since = Number(url.searchParams.get('since')) || 0;
+    return Response.json({ events: await eventsSince(since), now: Date.now() }, { headers: { 'Cache-Control': 'no-store' } });
+  }
+  return new Response(null, { status: 204 });   // warm-up while the owner talks
 }
 
 export async function POST(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) return new Response('unauthorized', { status: 401 });
+  if (url.searchParams.get('box') === 'agent') {
+    let event;
+    try { event = cleanEvent(await request.json()); } catch { event = null; }
+    if (!event) return new Response('bad event', { status: 400 });
+    await pushEvent(event);
+    return Response.json({ ok: true });
+  }
   const body = Buffer.from(await request.arrayBuffer());
   const samples = new Int16Array(body.buffer.slice(body.byteOffset, body.byteOffset + body.length - (body.length % 2)));
   if (samples.length < IN_RATE / 4 || samples.length > IN_RATE * MAX_SECONDS) return new Response('audio must be 0.25-30 s', { status: 400 });
@@ -158,6 +175,9 @@ export async function POST(request) {
   ]);
   const heard = transcript.trim();
   console.log('glasses | heard:', heard, '| ms:', Date.now() - t0);
+  if (request.headers.get('x-followup') === '1' && (!heard || NOT_A_REPLY.test(heard))) {
+    return new Response(JSON.stringify({ heard, ignored: true }) + '\n', { headers: { 'Content-Type': 'application/octet-stream' } });
+  }
   if (!heard) return answer('', "Sorry, I didn't catch that.", { huh: true });
 
   const history = historyFrom(request);
