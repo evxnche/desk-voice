@@ -6,6 +6,9 @@ Claude Code hooks (JSON on stdin, event name as argv[1]):
   stop    Stop              chime "done" only if the turn ran >= LONG_TURN_S (short replies are
                             ones you're watching anyway)
   notify  Notification      chime "needs you" (permission prompts, idle input requests)
+  permission  PermissionRequest  while the glasses are on, ask through them ("Claude wants to run: npm test.
+                            Allow, deny, or always allow?") and wait up to REPLY_WAIT_S for the spoken answer;
+                            no answer (or glasses off) leaves the usual prompt
 Codex `notify` (JSON as the last argv): agent-turn-complete -> "done".
 
 Each Claude session's state (working / waiting / done, its project and your last prompt) is kept in
@@ -13,9 +16,10 @@ turns/<session> for deskpal-mac.py, which tells the board ("what's Claude doing?
 
 Each alert also goes to desk-voice's /api/agent mailbox, which the glasses app polls.
 
-Always exits 0 within ~2 s: a board that's off or on another network must never slow an agent.
+Always exits 0 within ~2 s (except `permission` while the glasses are on): a board that's off or on another
+network must never slow an agent.
 """
-import json, os, socket, ssl, sys, threading, time, urllib.request
+import json, os, socket, ssl, sys, threading, time, urllib.parse, urllib.request, uuid
 
 BOARD = "deskpal.local"
 # Your own desk-voice deployment: DESKPAL_AGENT_URL=https://<yours>.vercel.app/api/agent in the hooks' environment.
@@ -27,6 +31,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KEY = open(os.path.join(HERE, "key")).read().strip()
 IP_CACHE = os.path.join(HERE, "board-ip")
 STARTS = os.path.join(HERE, "turns")
+ASKS = os.path.join(HERE, "asks")     # a permission question waiting on the glasses, per session
+REPLY_WAIT_S = 100                    # under the hook's 120 s timeout in ~/.claude/settings.json
 
 
 def board_ip():
@@ -42,8 +48,11 @@ def board_ip():
     return ip
 
 
-def send(agent, project, kind, message):
-    body = json.dumps({"agent": agent, "project": project, "kind": kind, "message": message[:240]}).encode()
+def send(agent, project, kind, message, ask=None):
+    event = {"agent": agent, "project": project, "kind": kind, "message": message[:240]}
+    if ask:
+        event["id"] = ask
+    body = json.dumps(event).encode()
 
     def to_board():
         # A failed send keeps the remembered address: the board may just be restarting, and deleting it
@@ -69,6 +78,66 @@ def send(agent, project, kind, message):
         t.start()
     for t in sends:
         t.join(2)
+
+
+def mailbox(params):
+    url = CLOUD + "?" + urllib.parse.urlencode({"k": KEY, **params})
+    with urllib.request.urlopen(url, timeout=3, context=TLS) as r:
+        return json.load(r)
+
+
+def asking(session):
+    # True while this session's permission question is out on the glasses (so `notify` doesn't repeat it).
+    try:
+        return time.time() - os.path.getmtime(os.path.join(ASKS, session)) < REPLY_WAIT_S + 10
+    except OSError:
+        return False
+
+
+def describe(tool, args):
+    if tool == "Bash":
+        command = " ".join(str(args.get("command") or "").split())
+        return "Wants to run: %s." % (command[:117] + "..." if len(command) > 120 else command)
+    path = args.get("file_path") or args.get("notebook_path")
+    if path:
+        return "Wants to edit %s." % os.path.basename(path)
+    if tool == "WebFetch":
+        return "Wants to open %s." % (urllib.parse.urlparse(str(args.get("url") or "")).hostname or "a web page")
+    if tool.startswith("mcp__"):
+        return "Wants to use %s." % tool.split("__")[-1].replace("_", " ")
+    return "Wants to use %s." % tool
+
+
+def permission():
+    data = json.load(sys.stdin)
+    if not mailbox({"live": "check"}).get("live"):
+        return
+    session = data.get("session_id", "unknown")
+    ask = uuid.uuid4().hex
+    os.makedirs(ASKS, exist_ok=True)
+    marker = os.path.join(ASKS, session)
+    open(marker, "w").close()
+    try:
+        project = os.path.basename(data.get("cwd") or os.getcwd())
+        send("Claude", project, "needs", describe(data.get("tool_name") or "a tool", data.get("tool_input") or {}), ask)
+        answer, deadline = None, time.time() + REPLY_WAIT_S
+        while not answer and time.time() < deadline:
+            time.sleep(2)
+            try:
+                answer = mailbox({"reply": ask}).get("answer")
+            except Exception:
+                pass
+    finally:
+        os.remove(marker)
+    if not answer:
+        return
+    if answer == "deny":
+        decision = {"behavior": "deny", "message": "Denied from the glasses."}
+    else:
+        decision = {"behavior": "allow"}
+        if answer == "always" and data.get("permission_suggestions"):
+            decision["updatedPermissions"] = data["permission_suggestions"]
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}))
 
 
 def claude(event):
@@ -101,7 +170,7 @@ def claude(event):
         json.dump(turn, f)
     if event == "stop" and took >= LONG_TURN_S:
         send("Claude", project, "done", "Finished after %d min." % max(1, round(took / 60)))
-    elif event == "notify":
+    elif event == "notify" and not asking(session):
         send("Claude", project, "needs", data.get("message") or "Claude is waiting for you.")
 
 
@@ -115,7 +184,9 @@ def codex(payload):
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) > 1 and sys.argv[1] in ("prompt", "stop", "notify"):
+        if len(sys.argv) > 1 and sys.argv[1] == "permission":
+            permission()
+        elif len(sys.argv) > 1 and sys.argv[1] in ("prompt", "stop", "notify"):
             claude(sys.argv[1])
         elif len(sys.argv) > 3 and sys.argv[1] == "--chain":
             # Codex allows one notify command; run the one that was there before, then ours.

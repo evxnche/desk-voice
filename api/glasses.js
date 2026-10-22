@@ -7,8 +7,12 @@
 //
 // Also the agent pager mailbox (lib/pager.js), as /api/agent (vercel.json rewrites it to ?box=agent; one function
 // instead of two keeps the project within the Hobby plan's 12):
-//   POST {agent, project, kind: 'done'|'needs', message}  from mac/deskpal-notify.py
-//   GET  ?since=<ms>  -> {events: [...oldest first], now}  polled by the iPhone app
+//   POST {agent, project, kind: 'done'|'needs', message[, id]}  from mac/deskpal-notify.py (id: a permission
+//        question the owner can answer through the glasses)
+//   GET  ?since=<ms>[&live=1]  -> {events: [...oldest first], now}  polled by the iPhone app; live=1 while the glasses are on
+//   GET  ?live=check  -> {live}  and  ?reply=<id>  -> {answer: 'allow'|'deny'|'always'|null}  for the Mac hook
+// X-Agent-Reply: <id> on a recording makes it the answer to that question ("allow", "no", "always allow"): {answered: true}
+// once stored. "What did Claude say?" repeats the newest alert, with {agent_ask: id} while its question is open.
 import { generateText, jsonSchema, stepCountIs, tool } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 import { centreFrom, geocode } from '../lib/flights.js';
@@ -16,7 +20,7 @@ import { getWeather } from '../lib/weather.js';
 import { describe as describeCalendar, getCalendars, TZ, TZ_PLACE } from '../lib/calendar.js';
 import { fetchNotyNotes, listNotyNotes, notyContext, readNotyNote, searchNotyNotes } from '../lib/noty.js';
 import { addNotyTask, INBOX_TITLE, saveNotyNote } from '../lib/noty-write.js';
-import { cleanEvent, eventsSince, pushEvent } from '../lib/pager.js';
+import { cleanEvent, eventsSince, getReply, ID, isLive, markLive, pushEvent, replyFrom, sentence, setReply } from '../lib/pager.js';
 import { FORGET, historyFrom, limitsSummary, needsSearch, normalize, NOT_A_REPLY, practiceAnswer, practiceSwitch, speak, toWav,
   transcribeQuestion } from './voice.js';
 
@@ -31,6 +35,10 @@ const NOTE = /^\W*(?:(?:take|make|add|save|write(?: down)?)\s+(?:a\s+)?)?note(?:
 export const TASKY = /\b(add|put)\b.+\b(to|on|in)\s+(my\s+)?(tasks?|to-?dos?|to-?do list|plan|list)\b|\bremind me to\b/i;
 // "Read my articles", "start ezRead", "play my reading list".
 export const READY = /\b(read|play|start|open)\b.*\b(articles?|reading list|read(ing)? later|ez ?read)\b|^\W*ez ?read\W*$/i;
+// "What did Claude say?", "repeat the last alert": the newest agent event, word for word.
+export const REPEAT = /\bwhat did (claude|codex|the agent) (just )?(say|want|ask)\b|\brepeat (the |that |my )?(last )?(alert|notification)\b/i;
+const ASK = ' Allow, deny, or always allow?';
+const REPLIED = { allow: 'Okay, allowed.', always: "Okay, always allowed. It won't ask again.", deny: 'Okay, denied.' };
 
 export function noteText(heard) {
   const m = NOTE.exec(heard);
@@ -144,8 +152,13 @@ export async function GET(request) {
   const url = new URL(request.url);
   if (!process.env.VOICE_KEY || url.searchParams.get('k') !== process.env.VOICE_KEY) return new Response('unauthorized', { status: 401 });
   if (url.searchParams.get('box') === 'agent') {
+    const fresh = { headers: { 'Cache-Control': 'no-store' } };
+    const id = url.searchParams.get('reply');
+    if (id) return Response.json({ answer: ID.test(id) ? await getReply(id) : null }, fresh);
+    if (url.searchParams.get('live') === 'check') return Response.json({ live: await isLive() }, fresh);
+    if (url.searchParams.get('live') === '1') await markLive().catch(() => {});
     const since = Number(url.searchParams.get('since')) || 0;
-    return Response.json({ events: await eventsSince(since), now: Date.now() }, { headers: { 'Cache-Control': 'no-store' } });
+    return Response.json({ events: await eventsSince(since), now: Date.now() }, fresh);
   }
   return new Response(null, { status: 204 });   // warm-up while the owner talks
 }
@@ -178,7 +191,20 @@ export async function POST(request) {
   if (request.headers.get('x-followup') === '1' && (!heard || NOT_A_REPLY.test(heard))) {
     return new Response(JSON.stringify({ heard, ignored: true }) + '\n', { headers: { 'Content-Type': 'application/octet-stream' } });
   }
+  const replyTo = request.headers.get('x-agent-reply');
+  if (replyTo && ID.test(replyTo)) {
+    const choice = replyFrom(heard);
+    if (!choice) return answer(heard, "I didn't catch allow or deny, so it's still waiting on your Mac.");
+    await setReply(replyTo, choice);
+    return answer(heard, REPLIED[choice], { answered: true });
+  }
   if (!heard) return answer('', "Sorry, I didn't catch that.", { huh: true });
+  if (REPEAT.test(heard)) {
+    const last = events.at(-1);
+    if (!last) return answer(heard, 'No alerts from Claude or Codex in the last few hours.');
+    const open = last.id && !(await getReply(last.id).catch(() => 'unknown'));
+    return answer(heard, sentence(last) + (open ? ASK : ''), open ? { agent_ask: last.id } : {});
+  }
 
   const history = historyFrom(request);
   const practice = practiceSwitch(heard, practicing);

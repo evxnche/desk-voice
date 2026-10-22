@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { noteText, READY, stamp, TASKY } from '../api/glasses.js';
+import { noteText, READY, REPEAT, stamp, TASKY } from '../api/glasses.js';
 import { addNotyTask, saveNotyNote } from '../lib/noty-write.js';
-import { cleanEvent, eventsSince } from '../lib/pager.js';
+import { cleanEvent, eventsSince, replyFrom, sentence } from '../lib/pager.js';
 
 process.env.NOTY_NOTES_URL = 'https://noty.example.test/api/notes';
 
@@ -79,4 +79,22 @@ test('agent events are cleaned and returned oldest first after `since`', async (
   const stored = [{ at: 30 }, { at: 20 }, { at: 10 }].map((e) => JSON.stringify(e));   // LPUSH: newest first
   const fetchImpl = async () => ({ ok: true, json: async () => [{ result: stored }] });
   assert.deepEqual(await eventsSince(10, fetchImpl), [{ at: 20 }, { at: 30 }]);
+});
+
+test('permission questions keep their id, and spoken answers are read conservatively', () => {
+  assert.equal(cleanEvent({ agent: 'Claude', kind: 'needs', id: 'abc12345def' }, 5).id, 'abc12345def');
+  assert.equal(cleanEvent({ agent: 'Claude', kind: 'done', id: 'abc12345def' }, 5).id, undefined);
+  assert.equal(cleanEvent({ agent: 'Claude', kind: 'needs', id: '../x' }, 5).id, undefined);
+  for (const s of ['Allow', 'Yes.', 'yeah go ahead', 'approve it', 'Do it']) assert.equal(replyFrom(s), 'allow', s);
+  for (const s of ['Always allow', 'always']) assert.equal(replyFrom(s), 'always', s);
+  for (const s of ['No', 'Deny.', "don't allow that", 'no, always ask', 'stop']) assert.equal(replyFrom(s), 'deny', s);
+  for (const s of ['', 'Thank you.', 'Okay', 'what is it running?']) assert.equal(replyFrom(s), null, s);
+});
+
+test('"what did Claude say?" repeats the newest alert', () => {
+  for (const s of ['What did Claude say?', 'what did codex just say', 'Repeat the last alert', 'what did Claude want']) assert.ok(REPEAT.test(s), s);
+  for (const s of ['What did you say?', "What's Claude doing?"]) assert.ok(!REPEAT.test(s), s);
+  assert.equal(sentence({ agent: 'Claude', project: 'ezmeta', kind: 'needs', message: 'Wants to run: npm test' }),
+    'Claude needs you in ezmeta. Wants to run: npm test');
+  assert.equal(sentence({ agent: 'Codex', project: '', kind: 'done', message: '' }), 'Codex finished.');
 });
