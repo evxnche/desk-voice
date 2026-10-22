@@ -4,3 +4,4 @@ node_modules
 noty-sync.json
 noty-sync-state.json*
 __pycache__/
+!.env.example

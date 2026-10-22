@@ -18,7 +18,8 @@ Always exits 0 within ~2 s: a board that's off or on another network must never 
 import json, os, socket, ssl, sys, threading, time, urllib.request
 
 BOARD = "deskpal.local"
-CLOUD = "https://desk-voice.vercel.app/api/agent"
+# Your own desk-voice deployment: DESKPAL_AGENT_URL=https://<yours>.vercel.app/api/agent in the hooks' environment.
+CLOUD = os.environ.get("DESKPAL_AGENT_URL", "https://desk-voice.vercel.app/api/agent")
 # python.org's Python (what `python3` is here) has no CA certificates of its own; macOS ships a bundle.
 TLS = ssl.create_default_context(cafile="/etc/ssl/cert.pem") if os.path.exists("/etc/ssl/cert.pem") else None
 LONG_TURN_S = 60

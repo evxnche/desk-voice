@@ -2,6 +2,8 @@
 
 Firmware + backend for a Waveshare ESP32-S3-RLCD-4.2 desk gadget (MicroPython v1.29).
 
+Running your own copy for the Ray-Ban Meta glasses app (ezmeta)? See [Deploy your own](#deploy-your-own-glasses-server).
+
 - `board/` — MicroPython app. Screens (BOOT cycles): the Pal (Claude's pixel crab, the start screen: `pal.py`; reacts when it hears talking, asleep 22:00-08:00, and is the assistant's face while it listens, thinks and speaks), agent usage limits, room (time + temp/humidity), Pixel Pal game, flight radar (`api/flights.js` -> adsb.lol). KEY tap refreshes limits; KEY hold = talk to the assistant. After an answer it listens 6 s for a reply without the wake phrase and remembers the last 6 exchanges for 10 minutes (RAM only). "Let's practice Spanish" turns it into a beginner Spanish tutor (no other features, 15 s to reply) until "stop practicing" or 10 quiet minutes. `companion.py` speaks up on its own via `/api/say` (handled in `api/voice.js`; the Hobby plan allows 12 functions): Claude/Codex needs you, a limit passes 90%, rain within the hour, a morning hello.
 - `api/voice.js` — Vercel function: 15625 Hz mono PCM in -> transcribe (spacexai/grok-stt; `STT_MODEL` env overrides it) -> openai/gpt-oss-120b (fastest free-tier model; `CHAT_MODEL` env overrides it) -> TTS (spacexai/grok-tts, voice Ara; `TTS_MODEL` / `TTS_VOICE` env override them) -> PCM out, all via AI Gateway (OIDC). With `X-Audio: adpcm` (the board sends it) audio goes both ways as 4-bit IMA ADPCM, a quarter of the bytes (`lib/adpcm.js`, `board/adpcm.py`).
 - `api/glasses.js` — Desk Pal on Ray-Ban Meta glasses, for the ezmeta iPhone app: 16 kHz PCM in -> the same transcriber, model and voice, with web search, weather, Noty notes (read; "note: ..." appends to an **Inbox** note, "add X to my tasks" adds a ☐ row to the Desk Pal note via Noty's task API), recent agent events and limits -> JSON line + 24 kHz WAV. "Read my articles" tells the app to start ezRead. It is also `/api/agent` (a rewrite): the agent pager mailbox that `mac/deskpal-notify.py` posts to and the app polls (Upstash, `KV_REST_API_URL` / `KV_REST_API_TOKEN`, newest 20 for a day).
@@ -66,3 +68,55 @@ Wake phrase ("gee gee", i.e. "gg"; `WAKE_PHRASES` in `board/audio.py`): needs De
 Voice replies have no app-imposed token cap or sentence count: ask for a detailed explanation when you want one. The voice function has up to 300 seconds to generate the text and speech (not a playback-duration limit). The board starts speaking once ~1 s of the compressed reply has arrived and plays the rest as it downloads, decoding 4 KB PCM chunks so long answers never need a full uncompressed copy. The speaker buffer holds ~1 s, and nothing sleeps while audio is ready, so screen redraws and the download don't starve it; `audio.starved` counts any gaps (voice.py prints them). A download that breaks mid-reply stops playback instead of padding it.
 
 If an answer opens a screen (limits, weather, radar...), the rest of that conversation stays on it: a little Pal in a blank stretch of that screen's header (never over any text) shows it's waiting for your reply, listening, thinking and talking. General questions use the full-screen Pal.
+
+## Deploy your own (glasses server)
+
+Your own copy, on your own Vercel, Upstash and AI Gateway: nothing here points at anyone else's server. The
+ezmeta iPhone app needs two endpoints from it: `/api/glasses` (talk to Desk Pal) and `/api/agent` (the agent
+pager). Everything else here (board, Spotify, flights, plan, limits, Mac control) is optional and can stay unset.
+Every variable is listed, with a comment, in [`.env.example`](.env.example).
+
+1. **Fork and import.** Fork github.com/evxnche/desk-voice, then Vercel → **Add New → Project** → import the
+   fork. No build command; Vercel reads `vercel.json`. Hobby plan is fine (this repo stays at its 12 functions).
+2. **Redis for the agent pager.** Project → **Storage** → **Upstash for Redis** (Marketplace) → free plan →
+   connect it to the project. That sets `KV_REST_API_URL` and `KV_REST_API_TOKEN`.
+3. **AI Gateway.** Vercel dashboard → **AI Gateway** → turn it on and add credits (the Grok, OpenAI and Perplexity calls are
+   billed from them; the free monthly credit covers light use). On Vercel the functions authenticate with OIDC
+   automatically, so no key is needed. Only outside Vercel, make an AI Gateway API key and set `AI_GATEWAY_API_KEY`.
+   Default models, all through the gateway (override with the env vars in brackets):
+   - speech to text: `spacexai/grok-stt` (`STT_MODEL`), falling back to `openai/gpt-4o-mini-transcribe`
+   - chat: `openai/gpt-oss-120b` (`CHAT_MODEL`), with Perplexity web search as a gateway tool
+   - text to speech: `spacexai/grok-tts`, voice `ara` (`TTS_MODEL`, `TTS_VOICE`)
+4. **Noty (optional, for notes and tasks).** Deploy your own Noty sync server: the `web/` folder of your fork of
+   github.com/evxnche/noty (its README has "Deploy your own"). Then `NOTY_NOTES_URL` is
+   `https://<your-noty>.vercel.app/api/notes` and `NOTY_SYNC_TOKEN` is that server's `NOTY_SYNC_TOKEN`. There is
+   no default server: without both, the glasses still answer but say notes can't be reached. "Add X to my tasks"
+   also needs a Desk Pal note chosen in the Noty app.
+5. **Make the key.** `openssl rand -hex 24` → that's your `VOICE_KEY`.
+6. **Set the env vars** (Project → Settings → Environment Variables, Production): `VOICE_KEY`, the Noty pair,
+   and `DESK_TZ` (e.g. `America/New_York`) + `DESK_PLACE` (e.g. `New York`) so times are yours, not India's.
+7. **Deploy:** Deployments → **Redeploy** (env vars only apply to new deployments), or push to the fork.
+
+Check it (replace the host and key):
+
+```sh
+H=https://your-desk-voice.vercel.app K=your-voice-key
+curl -i "$H/api/glasses?k=$K"                      # 204 = key OK (401 = wrong key)
+curl -s "$H/api/agent?k=$K"                        # {"events":[],"now":...} = Redis OK
+curl -s -X POST "$H/api/agent?k=$K" -H 'Content-Type: application/json' \
+  -d '{"agent":"Claude Code","project":"test","kind":"done","message":"hello"}'   # {"ok":true}
+say -o q.wav --file-format=WAVE --data-format=LEI16@16000 "What time is it?"   # macOS; any 16 kHz 16-bit mono PCM works
+curl -s -X POST "$H/api/glasses?k=$K" --data-binary @q.wav | head -1   # {"heard":"What time is it?","reply":"..."} = AI Gateway OK
+```
+
+A reply of "I've hit the free tier's limit" or "something went wrong" means AI Gateway needs credits; check the
+function logs in Vercel.
+
+**In the ezmeta iPhone app** (`Config/Secrets.xcconfig`): `VOICE_HOST` = your deployment's host with no
+`https://` (e.g. `your-desk-voice.vercel.app`) and `VOICE_KEY` = the key from step 5.
+
+**Agent alerts from your Mac (optional):** `mac/deskpal-notify.py` posts to `/api/agent`. Set
+`DESKPAL_AGENT_URL=https://your-desk-voice.vercel.app/api/agent` in the environment your Claude Code hooks run
+in, and put your `VOICE_KEY` in the `key` file next to the script.
+
+Tests: `npm test` (JS) and `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test -p 'test_*.py'` (board).

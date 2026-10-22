@@ -2,6 +2,9 @@
   "name": "desk-voice",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.91",
     "ai": "^7.0.113",

@@ -4,6 +4,8 @@ import { fetchNotyNotes, noteDisplayAcknowledgement, noteDisplayRequest, noteQue
   resolveNotyNote, searchNotyNotes } from '../lib/noty.js';
 import { applyBoardBackstops, boardTools, buildVoiceMessages, POST, selectVoiceTools } from '../api/voice.js';
 
+process.env.NOTY_NOTES_URL = 'https://noty.example.test/api/notes';
+
 const deskId = '11111111-1111-4111-8111-111111111111';
 const workId = '22222222-2222-4222-8222-222222222222';
 const homeId = '33333333-3333-4333-8333-333333333333';
@@ -44,6 +46,13 @@ test('notes fetch marks missing credentials as unavailable without a network cal
   assert.equal(result.unavailable, true);
   assert.equal(calls, 0);
   assert.equal(result.notes, undefined);
+});
+
+test('notes fetch without NOTY_NOTES_URL is unavailable, never a built-in server', async () => {
+  let calls = 0;
+  const result = await fetchNotyNotes({ url: '', token: 'token', fetchImpl: async () => { calls++; } });
+  assert.equal(result.code, 'configuration');
+  assert.equal(calls, 0);
 });
 
 test('notes fetch retries one transient service failure, preserving the five second deadline', async () => {

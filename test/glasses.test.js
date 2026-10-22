@@ -4,6 +4,8 @@ import { noteText, READY, stamp, TASKY } from '../api/glasses.js';
 import { addNotyTask, saveNotyNote } from '../lib/noty-write.js';
 import { cleanEvent, eventsSince } from '../lib/pager.js';
 
+process.env.NOTY_NOTES_URL = 'https://noty.example.test/api/notes';
+
 test('notes are recognised without the model', () => {
   assert.equal(noteText('Note: buy solder.'), 'buy solder');
   assert.equal(noteText('Take a note, call mum about Sunday'), 'call mum about Sunday');
