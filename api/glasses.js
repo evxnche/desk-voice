@@ -21,8 +21,8 @@ import { describe as describeCalendar, getCalendars, TZ, TZ_PLACE } from '../lib
 import { fetchNotyNotes, listNotyNotes, notyContext, readNotyNote, searchNotyNotes } from '../lib/noty.js';
 import { addNotyTask, INBOX_TITLE, saveNotyNote } from '../lib/noty-write.js';
 import { cleanEvent, eventsSince, getReply, ID, isLive, markLive, pushEvent, replyFrom, sentence, setReply } from '../lib/pager.js';
-import { FORGET, historyFrom, limitsSummary, needsSearch, normalize, NOT_A_REPLY, practiceAnswer, practiceSwitch, speak, toWav,
-  transcribeQuestion } from './voice.js';
+import { DICTATE_OFF, DICTATE_ON, FORGET, historyFrom, limitsSummary, needsSearch, normalize, NOT_A_REPLY, PLACEHOLDER,
+  practiceAnswer, practiceSwitch, speak, toWav, transcribeQuestion } from './voice.js';
 
 const IN_RATE = 16000;
 const OUT_RATE = 24000;
@@ -39,6 +39,15 @@ export const READY = /\b(read|play|start|open)\b.*\b(articles?|reading list|read
 export const REPEAT = /\bwhat did (claude|codex|the agent) (just )?(say|want|ask)\b|\brepeat (the |that |my )?(last )?(alert|notification)\b/i;
 const ASK = ' Allow, deny, or always allow?';
 const REPLIED = { allow: 'Okay, allowed.', always: "Okay, always allowed. It won't ask again.", deny: 'Okay, denied.' };
+
+// Dictation: "dictation mode" turns it on ({dictate: true}); while it's on (X-Dictate: 1) each recording comes back
+// as {type} for the app to type on the Mac, without audio, until "stop dictation" ({dictate: false}).
+export function glassesDictation(heard, dictating) {
+  if (dictating) return DICTATE_OFF.test(heard) ? { reply: 'Dictation off.', dictate: false } : { type: heard.slice(0, 2000) };
+  if (DICTATE_OFF.test(heard)) return { reply: 'Dictation is already off.' };   // "dictation mode stop" isn't "dictation mode"
+  if (DICTATE_ON.test(heard)) return { reply: "Dictation on. Talk, and I'll type it on your Mac. Say stop dictation when you're done.", dictate: true };
+  return null;
+}
 
 export function noteText(heard) {
   const m = NOTE.exec(heard);
@@ -59,7 +68,7 @@ async function answer(heard, text, extra = {}) {
   return new Response(body, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(body.length) } });
 }
 
-function glassesTools(snapshot, home, actions) {
+export function glassesTools(snapshot, home, actions) {
   const calendars = process.env.PLAN_CALENDARS;
   return {
     web_search: gateway.tools.perplexitySearch({ maxResults: 5, maxTokensPerPage: 512 }),
@@ -104,7 +113,7 @@ function glassesTools(snapshot, home, actions) {
       inputSchema: jsonSchema({ type: 'object', properties: { text: { type: 'string' } }, additionalProperties: false }),
       execute: async ({ text }) => {
         const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-        if (!clean) return { ok: false, error: 'No task given: ask the owner what it is' };
+        if (!clean || PLACEHOLDER.test(clean)) return { ok: false, error: 'No task given: ask the owner what it is' };
         try { return { ok: true, added: clean, ...(await addNotyTask(clean)) }; } catch (e) { return { ok: false, error: e.message }; }
       },
     }),
@@ -179,6 +188,15 @@ export async function POST(request) {
   const practicing = request.headers.get('x-practice') === 'es';
   const t0 = Date.now();
 
+  // Dictation mode: only the transcript is needed, as fast as possible.
+  if (request.headers.get('x-dictate') === '1') {
+    const heard = (await transcribeQuestion(toWav(normalize(samples), IN_RATE), false)).text.trim();
+    console.log('glasses | dictation:', heard.length, 'chars | ms:', Date.now() - t0);
+    const d = heard ? glassesDictation(heard, true) : { ignored: true };
+    if (d.reply) return answer(heard, d.reply, { dictate: d.dictate });
+    return new Response(JSON.stringify({ heard, ...d }) + '\n', { headers: { 'Content-Type': 'application/octet-stream' } });
+  }
+
   // Everything the answer may need, fetched while the audio is transcribed.
   const [{ text: transcript }, limits, snapshot, events] = await Promise.all([
     transcribeQuestion(toWav(normalize(samples), IN_RATE), practicing),
@@ -205,6 +223,8 @@ export async function POST(request) {
     const open = last.id && !(await getReply(last.id).catch(() => 'unknown'));
     return answer(heard, sentence(last) + (open ? ASK : ''), open ? { agent_ask: last.id } : {});
   }
+  const dictate = glassesDictation(heard, false);
+  if (dictate) return answer(heard, dictate.reply, { dictate: dictate.dictate });
 
   const history = historyFrom(request);
   const practice = practiceSwitch(heard, practicing);

@@ -167,7 +167,7 @@ test('asking for the menu opens the menu screen', () => {
 test('"add a task" with no task asks instead of adding a made-up one', async () => {
   const commands = [];
   const tools = boardTools(commands, '', { memories: [], alert: null, plan: { todo: [], done: [], projects: [] } });
-  for (const text of [undefined, '', 'New task', 'a task', 'task', 'new to-do']) {
+  for (const text of [undefined, '', 'New task', 'a task', 'task', 'new to-do', '[unspecified task]', 'Unspecified', '<task>']) {
     const r = await tools.update_tasks.execute({ action: 'add', text });
     assert.equal(r.ok, false, String(text));
     assert.match(r.error, /ask/);

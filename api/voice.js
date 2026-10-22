@@ -271,8 +271,8 @@ function offer(history) {
 }
 
 // Things the board should do after speaking: {do: 'timer'|'timer_pause'|'timer_cancel'|'screen'|'music', ...}.
-// What the model writes when told to add something it wasn't told ("add a task" -> "New task").
-const PLACEHOLDER = /^(a |an |the |my |another )?(new |untitled |another )?(task|to-?do|item|thing|project|idea)s?$/i;
+// What the model writes when told to add something it wasn't told ("add a task" -> "New task", "[unspecified task]").
+export const PLACEHOLDER = /^\W*(a |an |the |my |another |some )?(new |untitled |unnamed |unspecified |unknown |blank |placeholder |another )?(task|to-?do|item|thing|project|idea|reminder)s?\W*$|^\W*(unspecified|unknown|untitled|placeholder|something|tbd)\W*$/i;
 
 function notyTools(cmds, snapshot, heard) {
   const display = noteDisplayRequest(heard, snapshot?.notes);
@@ -803,8 +803,8 @@ export async function youTubeVideo(query, rank = 1, country = '') {
 
 // Dictation: "dictation mode" makes KEY recordings type on the Mac (X-Dictate from the board) until
 // "stop dictation"; "type see you at five" types one line from any recording.
-const DICTATE_ON = /\b(dictation mode|dictate mode|(start|turn on) dictat\w*)\b/i;
-const DICTATE_OFF = /\b(stop|end|exit|turn off|finish) dictat\w*\b|\bdictation off\b/i;
+export const DICTATE_ON = /\b(dictation mode|dictate mode|(start|turn on) dictat\w*)\b/i;
+export const DICTATE_OFF = /\b(stop|end|exit|turn off|finish) dictat\w*\b|\bdictat\w*(\W+mode)?\W+(stop|off|end|done|over)\b/i;
 const TYPE_LINE = /^\W*(type|dictate)\b[\s:,]+(.+)$/is;
 
 export function dictation(heard, dictating, macOnline) {

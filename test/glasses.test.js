@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { noteText, READY, REPEAT, stamp, TASKY } from '../api/glasses.js';
+import { glassesDictation, glassesTools, noteText, READY, REPEAT, stamp, TASKY } from '../api/glasses.js';
 import { addNotyTask, saveNotyNote } from '../lib/noty-write.js';
 import { cleanEvent, eventsSince, replyFrom, sentence } from '../lib/pager.js';
 
@@ -21,6 +21,20 @@ test('task and reading requests', () => {
   for (const s of ["What's on my to-do list?", 'How many tasks do I have?']) assert.ok(!TASKY.test(s), s);
   for (const s of ['Read my articles', 'start ezRead', 'play my reading list', 'EZ read']) assert.ok(READY.test(s), s);
   for (const s of ['What article did I save last?', 'Read me the weather']) assert.ok(!READY.test(s), s);
+});
+
+test('dictation: on, every line typed while it is on, and off', () => {
+  assert.equal(glassesDictation('Dictation mode.', false).dictate, true);
+  assert.equal(glassesDictation('Start dictating', false).dictate, true);
+  assert.equal(glassesDictation('What is the weather?', false), null);
+  assert.deepEqual(glassesDictation('See you at five.', true), { type: 'See you at five.' });
+  assert.deepEqual(glassesDictation('Dictation mode is great.', true), { type: 'Dictation mode is great.' });
+  assert.equal(glassesDictation('x'.repeat(3000), true).type.length, 2000);
+  assert.deepEqual(glassesDictation('Stop dictation.', true), { reply: 'Dictation off.', dictate: false });
+  for (const s of ['Dictation mode stop.', 'Dictation mode, stop.', 'Dictation mode. Stop.', 'Dictation stop', 'Dictation off.', 'dictation mode done'])
+    assert.deepEqual(glassesDictation(s, true), { reply: 'Dictation off.', dictate: false }, s);
+  for (const s of ['The dictation ended early.', 'Stop by the shop.', 'Dictation mode is great.']) assert.ok(glassesDictation(s, true).type, s);
+  assert.deepEqual(glassesDictation('Dictation mode stop.', false), { reply: 'Dictation is already off.' });
 });
 
 test('Inbox lines are stamped in local time', () => {
@@ -97,4 +111,13 @@ test('"what did Claude say?" repeats the newest alert', () => {
   assert.equal(sentence({ agent: 'Claude', project: 'ezmeta', kind: 'needs', message: 'Wants to run: npm test' }),
     'Claude needs you in ezmeta. Wants to run: npm test');
   assert.equal(sentence({ agent: 'Codex', project: '', kind: 'done', message: '' }), 'Codex finished.');
+});
+
+test('"add a task" with no task asks instead of adding a made-up one', async () => {
+  const { add_task } = glassesTools(null, null, []);
+  for (const text of [undefined, '', 'New task', '[unspecified task]', 'unspecified', 'a to-do']) {
+    const r = await add_task.execute({ text });
+    assert.equal(r.ok, false, String(text));
+    assert.match(r.error, /ask/);
+  }
 });
