@@ -176,28 +176,48 @@ def look(question):
     say_on_board("screen", text)
 
 
-# Pages open as real tabs in Arc's main window (macOS's "open" puts them in a Little Arc pop-up, which
-# scripts can't see), so "close that tab" can close exactly the tab this helper opened.
-_opened_tab = [None]                                 # Arc id of the last tab this helper opened
+# Pages open as real tabs in the default browser's main window (Yab and Arc can be scripted this way;
+# macOS's "open" puts Arc's in a Little Arc pop-up, which scripts can't see), so "close that tab" can close
+# exactly the tab this helper opened. A browser that can't be scripted like that just gets "open".
+_opened_tab = [None]                                 # id of the last tab this helper opened
 
 
-def arc(script):
-    r = subprocess.run(["osascript", "-e", 'tell application "Arc"\n%s\nend tell' % script],
+def default_browser():
+    """The app macOS opens web links in, e.g. "Yab"; "" if it can't tell. Read every time, so changing
+    the default browser needs no restart."""
+    import plistlib
+    try:
+        with open(os.path.expanduser("~/Library/Preferences/com.apple.LaunchServices/"
+                                     "com.apple.launchservices.secure.plist"), "rb") as f:
+            handlers = plistlib.load(f).get("LSHandlers", [])
+        app_id = next(h["LSHandlerRoleAll"] for h in handlers if h.get("LSHandlerURLScheme") == "https")
+        path = subprocess.run(["mdfind", "kMDItemCFBundleIdentifier == '%s'" % app_id],
+                              capture_output=True, text=True, timeout=5).stdout.split("\n")[0]
+        with open(os.path.join(path, "Contents", "Info.plist"), "rb") as f:
+            return plistlib.load(f)["CFBundleName"]
+    except Exception:          # no such setting, app not found, mdfind slow: callers fall back to "open"
+        return ""
+
+
+def browser(script):
+    name = default_browser()
+    r = subprocess.run(["osascript", "-e", 'tell application "%s"\n%s\nend tell' % (name, script)],
                        capture_output=True, text=True, timeout=10)
     if r.returncode:
-        raise OSError("Arc: " + r.stderr.strip())     # e.g. not allowed to control Arc yet
+        raise OSError("%s: %s" % (name or "browser", r.stderr.strip()))   # e.g. not allowed to control it yet
     return r.stdout.strip()
 
 
-def arc_ids():
-    """Ids of the tabs in Arc's front window, in one request (tab by tab takes 10+ s with 1,400 tabs)."""
-    return set(arc("get id of every tab of front window").split(", "))
+def browser_tab_ids():
+    """Ids of the tabs in the browser's front window, in one request (tab by tab takes 10+ s with 1,400 tabs)."""
+    return set(browser("get id of every tab of front window").split(", "))
 
 
-def arc_tab(tab_id):
+def browser_tab(tab_id):
     """(url, title) of that tab, or None once it's closed."""
     try:      # asked directly: Arc can't read a tab kept in a variable
-        return arc('get URL of tab id "%s" of front window' % tab_id), arc('get title of tab id "%s" of front window' % tab_id)
+        return (browser('get URL of tab id "%s" of front window' % tab_id),
+                browser('get title of tab id "%s" of front window' % tab_id))
     except OSError:
         return None
 
@@ -205,14 +225,15 @@ def arc_tab(tab_id):
 def youtube_result(rank):
     """The rank-th video on the YouTube results page this helper last opened (else the tab in front), in
     the order the owner sees: YouTube orders results differently on every fetch, so the server's own
-    search can disagree about "the second video". None without such a page, or if Arc won't run it."""
+    search can disagree about "the second video". None without such a page, or if the browser won't run
+    JavaScript (Yab can't; the server's pick is used then)."""
     js = ("(()=>{const s=[];for(const a of document.querySelectorAll('ytd-video-renderer a#video-title'))"
           "{const h=a.href||'';if(h.includes('/watch?v=')&&!s.includes(h))s.push(h)}return s[%d]||''})()" % (rank - 1))
     for ref in (['tab id "%s" of front window' % _opened_tab[0]] if _opened_tab[0] else []) + ["active tab of front window"]:
         try:
-            if "youtube.com/results" not in arc("get URL of " + ref):
+            if "youtube.com/results" not in browser("get URL of " + ref):
                 continue
-            found = re.match(r"https://www\.youtube\.com/watch\?v=[\w-]{11}", arc('execute %s javascript "%s"' % (ref, js)))
+            found = re.match(r"https://www\.youtube\.com/watch\?v=[\w-]{11}", browser('execute %s javascript "%s"' % (ref, js)))
             if found:
                 return found.group(0)
         except (subprocess.TimeoutExpired, OSError) as e:   # closed tab, or JavaScript from Apple Events off
@@ -221,13 +242,13 @@ def youtube_result(rank):
 
 
 def open_page(url):
-    """A new tab in Arc's front window, remembered for "close that tab"; any other browser via open."""
+    """A new tab in the default browser's front window, remembered for "close that tab"; else via open."""
     try:
-        before = arc_ids()
-        arc('tell front window to make new tab with properties {URL:"%s"}\nactivate' % url.replace('"', "%22"))
-        new = arc_ids() - before
+        before = browser_tab_ids()
+        browser('tell front window to make new tab with properties {URL:"%s"}\nactivate' % url.replace('"', "%22"))
+        new = browser_tab_ids() - before
         _opened_tab[0] = new.pop() if len(new) == 1 else None
-    except (subprocess.TimeoutExpired, OSError) as e:   # no Arc window, or no permission yet
+    except (subprocess.TimeoutExpired, OSError) as e:   # no window, no permission yet, or not scriptable
         print("  ", e, flush=True)
         _opened_tab[0] = None
         subprocess.run(["open", url], check=True, capture_output=True)
@@ -245,16 +266,16 @@ def fits(target, url, title):
 def close_tab(target):
     """Close the tab this helper opened, else the tab you're on, and only if it's the one asked for;
     never any other tab."""
-    opened = arc_tab(_opened_tab[0]) if _opened_tab[0] else None
+    opened = browser_tab(_opened_tab[0]) if _opened_tab[0] else None
     if opened and fits(target, *opened):
-        arc('close tab id "%s" of front window' % _opened_tab[0])
+        browser('close tab id "%s" of front window' % _opened_tab[0])
         print("  closed the tab it opened:", opened[0], flush=True)
         _opened_tab[0] = None
         return
-    url, title = arc("get URL of active tab of front window"), arc("get title of active tab of front window")
+    url, title = browser("get URL of active tab of front window"), browser("get title of active tab of front window")
     if not fits(target, url, title):
         raise ValueError("neither the tab it opened nor the one in front is that")
-    arc("close active tab of front window")
+    browser("close active tab of front window")
     print("  closed the tab in front:", url, flush=True)
 
 
@@ -351,7 +372,8 @@ DISTRACTIONS = {"youtube.com": "YouTube", "x.com": "X", "twitter.com": "Twitter"
                 "instagram.com": "Instagram", "tiktok.com": "TikTok", "netflix.com": "Netflix",
                 "facebook.com": "Facebook", "twitch.tv": "Twitch"}
 DISTRACTING_APPS = {}                  # app name -> what to call it, e.g. {"TV": "Apple TV"}
-BROWSERS = {"Arc": 'tell application "Arc" to get URL of active tab of front window',
+BROWSERS = {"Yab": 'tell application "Yab" to get URL of active tab of front window',
+            "Arc": 'tell application "Arc" to get URL of active tab of front window',
             "Comet": 'tell application "Comet" to get URL of active tab of front window',
             "Google Chrome": 'tell application "Google Chrome" to get URL of active tab of front window',
             "Safari": 'tell application "Safari" to get URL of front document'}
